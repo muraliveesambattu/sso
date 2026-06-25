@@ -1,7 +1,14 @@
 jest.mock('../src/config/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
+jest.mock('../src/config/constants', () => ({
+  microsoft: {
+    tokenUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+  },
+}));
 
 const crypto = require('crypto');
-const { decodeJwt, generateJwtAssertion } = require('../src/utils/oidc/tokenExchange.util');
+const { EventEmitter } = require('events');
+const https = require('https');
+const { decodeJwt, generateJwtAssertion, exchangeCodeForTokens } = require('../src/utils/oidc/tokenExchange.util');
 
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 const makeJwt = (header, payload) => `${b64url(header)}.${b64url(payload)}.${Buffer.from('sig').toString('base64url')}`;
@@ -70,5 +77,161 @@ describe('tokenExchange.util — generateJwtAssertion (private_key_jwt)', () => 
     const b = generateJwtAssertion(clientId, tenantId, privateKeyEnc, thumbHex);
     const jtiOf = (j) => JSON.parse(Buffer.from(j.split('.')[1], 'base64url').toString()).jti;
     expect(jtiOf(a)).not.toBe(jtiOf(b));
+  });
+});
+
+describe('tokenExchange.util — exchangeCodeForTokens', () => {
+  let requestSpy;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    requestSpy = jest.spyOn(https, 'request');
+  });
+
+  afterEach(() => {
+    requestSpy.mockRestore();
+  });
+
+  const mockRequest = (responseFactory) => {
+    requestSpy.mockImplementation((options, callback) => {
+      const req = new EventEmitter();
+      let body = '';
+      req.write = jest.fn((chunk) => { body += chunk; });
+      req.end = jest.fn(() => {
+        const response = responseFactory({ options, body, req });
+        if (response.error) {
+          process.nextTick(() => req.emit('error', response.error));
+          return;
+        }
+        if (response.timeout) {
+          process.nextTick(() => req.emit('timeout'));
+          return;
+        }
+        const res = new EventEmitter();
+        res.statusCode = response.statusCode;
+        callback(res);
+        process.nextTick(() => {
+          if (response.body !== undefined) res.emit('data', response.body);
+          res.emit('end');
+        });
+      });
+      req.destroy = jest.fn();
+      return req;
+    });
+  };
+
+  test('sends client_secret auth params and parses the token response', async () => {
+    mockRequest(({ options, body }) => {
+      expect(options).toEqual(expect.objectContaining({
+        hostname: 'login.microsoftonline.com',
+        path: '/tenant-1/oauth2/v2.0/token',
+        method: 'POST',
+      }));
+      expect(body).toContain('client_secret=secret-1');
+      expect(body).toContain('code=code-1');
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ access_token: 'access-token', id_token: 'id-token' }),
+      };
+    });
+
+    await expect(
+      exchangeCodeForTokens(
+        'code-1',
+        'client-1',
+        'client_secret',
+        'secret-1',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token'
+      )
+    ).resolves.toEqual({ access_token: 'access-token', id_token: 'id-token' });
+  });
+
+  test('sends code_verifier for PKCE flows', async () => {
+    mockRequest(({ body }) => {
+      expect(body).toContain('code_verifier=pkce-verifier');
+      expect(body).not.toContain('client_secret=');
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ access_token: 'access-token' }),
+      };
+    });
+
+    await expect(
+      exchangeCodeForTokens(
+        'code-2',
+        'client-2',
+        'none',
+        'pkce-verifier',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-2/oauth2/v2.0/token'
+      )
+    ).resolves.toEqual({ access_token: 'access-token' });
+  });
+
+  test('sends client_assertion for private_key_jwt flows', async () => {
+    mockRequest(({ body }) => {
+      expect(body).toContain('client_assertion=signed-jwt');
+      expect(body).toContain('client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer');
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ access_token: 'access-token' }),
+      };
+    });
+
+    await expect(
+      exchangeCodeForTokens(
+        'code-3',
+        'client-3',
+        'private_key_jwt',
+        'signed-jwt',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-3/oauth2/v2.0/token'
+      )
+    ).resolves.toEqual({ access_token: 'access-token' });
+  });
+
+  test('rejects non-200 token responses', async () => {
+    mockRequest(() => ({
+      statusCode: 400,
+      body: '{"error":"invalid_grant"}',
+    }));
+
+    await expect(
+      exchangeCodeForTokens(
+        'code-4',
+        'client-4',
+        'client_secret_post',
+        'secret-4',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-4/oauth2/v2.0/token'
+      )
+    ).rejects.toThrow(/Token exchange failed: HTTP 400/);
+  });
+
+  test('rejects network and timeout failures', async () => {
+    mockRequest(() => ({ error: new Error('socket hang up') }));
+    await expect(
+      exchangeCodeForTokens(
+        'code-5',
+        'client-5',
+        'client_secret',
+        'secret-5',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-5/oauth2/v2.0/token'
+      )
+    ).rejects.toThrow('Network error: socket hang up');
+
+    mockRequest(() => ({ timeout: true }));
+    await expect(
+      exchangeCodeForTokens(
+        'code-6',
+        'client-6',
+        'client_secret',
+        'secret-6',
+        'http://localhost/callback',
+        'https://login.microsoftonline.com/tenant-6/oauth2/v2.0/token'
+      )
+    ).rejects.toThrow('Token exchange timed out');
   });
 });
