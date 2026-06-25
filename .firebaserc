@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "dnacloud-demo2-t"
+  },
+  "targets": {
+    "dnacloud-demo2-t": {
+      "hosting": {
+        "zdna-sso": [
+          "zdna-sso"
+        ]
+      }
+    }
+  }
+}

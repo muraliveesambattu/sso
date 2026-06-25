@@ -1,0 +1,55 @@
+node_modules/
+.env
+.env.production
+.env.dnacloud-demo2-t
+dist/
+build/
+coverage/
+*.log
+.claude/
+
+# Firebase service account key — never commit
+serviceAccountKey.json
+firebase-sa.json
+*-service-account.json
+*-sa.json
+
+# Certificates and private keys — never commit
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# SSO config — contains sensitive user data and client IDs
+src/data/ssoConfig.json
+
+# Local dev env overrides
+client/.env.development
+client/.env.local
+sso_Integration/.env
+sso_Integration/.env.local
+
+# ── Excluded from the SSO microservice branch (non-service content) ──
+zdna-functions/
+sso_Integration/
+vdi-reference/
+public/
+certs/
+*.zip
+*.docx
+TEST_ACCOUNT.txt
+TEST_PLAN.md
+gen-scope-doc.js
+cloudbuild.yaml
+Dockerfile
+docker-compose.yml
+.dockerignore
+CLAUDE.md
+AGENTS.md
+.DS_Store
+
+# Mock/seed data — may contain real client secrets
+src/mock/
