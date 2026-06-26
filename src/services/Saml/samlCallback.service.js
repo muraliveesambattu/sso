@@ -99,78 +99,6 @@ const extractSubject = (assertion) => {
   };
 };
 
-// Extract Conditions metadata
-const extractConditions = (assertion) => {
-  const conditions = assertion.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'Conditions'
-  )[0];
-
-  if (!conditions) return null;
-
-  const audienceRestriction = conditions.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'AudienceRestriction'
-  )[0];
-
-  const audience = audienceRestriction?.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'Audience'
-  )[0];
-
-  return {
-    notBefore: conditions.getAttribute('NotBefore'),
-    notOnOrAfter: conditions.getAttribute('NotOnOrAfter'),
-    audience: audience?.textContent.trim() || null
-  };
-};
-
-// Extract AuthnStatement
-const extractAuthnStatement = (assertion) => {
-  const authnStatement = assertion.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'AuthnStatement'
-  )[0];
-
-  if (!authnStatement) return null;
-
-  const authnContext = authnStatement.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'AuthnContext'
-  )[0];
-
-  const authnContextClassRef = authnContext?.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'AuthnContextClassRef'
-  )[0];
-
-  return {
-    authnInstant: authnStatement.getAttribute('AuthnInstant'),
-    sessionIndex: authnStatement.getAttribute('SessionIndex'),
-    authnContextClassRef: authnContextClassRef?.textContent.trim() || null
-  };
-};
-
-// Extract Issuer
-const extractIssuer = (doc) => {
-  const issuer = doc.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:assertion', 'Issuer'
-  )[0];
-
-  return issuer?.textContent.trim() || null;
-};
-
-// Extract Response metadata
-const extractResponseMetadata = (doc) => {
-  const response = doc.getElementsByTagNameNS(
-    'urn:oasis:names:tc:SAML:2.0:protocol', 'Response'
-  )[0];
-
-  if (!response) return null;
-
-  return {
-    id: response.getAttribute('ID'),
-    inResponseTo: response.getAttribute('InResponseTo'),
-    version: response.getAttribute('Version'),
-    issueInstant: response.getAttribute('IssueInstant'),
-    destination: response.getAttribute('Destination')
-  };
-};
-
 const processSamlCallback = async (samlResponse, relayState, session, clientIp) => {
   const startTime = Date.now();
 
@@ -221,7 +149,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
 
   const { ssoContext } = storedSession;
 
-  // LAYER 6: Retrieve Certificate from Firestore (NEVER expose to client)
+  // LAYER 6: Retrieve Certificate from the SSO store (NEVER expose to client)
   const samlConfig = await getSamlConfigByAcsUrl(ssoContext.acs_url);
 
   if (!samlConfig) {
@@ -279,10 +207,6 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   // LAYER 12: Extract ALL Data Dynamically
   const allAttributes = extractAllAttributes(assertion);
   const subject = extractSubject(assertion);
-  const conditions = extractConditions(assertion);
-  const authnStatement = extractAuthnStatement(assertion);
-  const issuer = extractIssuer(doc);
-  const responseMetadata = extractResponseMetadata(doc);
 
   // LAYER 13: Validate Required Claims (flexible lookup)
   const email = allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'] 
@@ -330,7 +254,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const resolution = await resolveUser(samlConfig.company_id, allAttributes, 'saml');
 
   // LAYER 17: Generate Firebase Custom Token
-  // Use ZDNA user_id as Firebase UID — matches Firestore document ID
+  // Use ZDNA user_id as Firebase UID
   const zdnaTenantId = resolution.user.user_id;
   logger.debug(`[SAML] Generating Firebase Custom Token | uid: ${zdnaTenantId} | email: ${email}`);
 

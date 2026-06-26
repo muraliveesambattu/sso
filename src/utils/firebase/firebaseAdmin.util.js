@@ -71,7 +71,7 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
     const additionalClaims = {
       email:       claims.email,
       role:        claims.role        || 'user',
-      tenantId:    zdnaTenantId,      // ZDNA user_id — matches Firestore document ID
+      tenantId:    zdnaTenantId,      // ZDNA user_id
       identity:    zdnaTenantId,      // required by AuthProvider for ADMIN_PERMISSION_TYPE path
       loginType:   'entra',           // distinguishes from PingFederate (v2)
       companyId:   claims.companyId,

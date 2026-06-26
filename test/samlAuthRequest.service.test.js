@@ -1,8 +1,8 @@
 const loadSamlAuthRequestService = ({ privateKeyPem = null, envPrivateKeyB64 = null, deflateImpl } = {}) => {
   jest.resetModules();
 
-  if (envPrivateKeyB64) process.env.SP_CERT_PRIVATE_KEY_B64 = envPrivateKeyB64;
-  else delete process.env.SP_CERT_PRIVATE_KEY_B64;
+  if (envPrivateKeyB64) process.env.SP_PRIVATE_KEY_B64 = envPrivateKeyB64;
+  else delete process.env.SP_PRIVATE_KEY_B64;
 
   const readFileSync = jest.fn(() => {
     if (privateKeyPem === null) throw new Error('missing key');
@@ -26,7 +26,7 @@ describe('samlAuthRequest.service', () => {
   afterEach(() => {
     jest.clearAllMocks();
     jest.resetModules();
-    delete process.env.SP_CERT_PRIVATE_KEY_B64;
+    delete process.env.SP_PRIVATE_KEY_B64;
   });
 
   test('builds an unsigned SAML redirect and stores the authn request context when no private key is available', async () => {

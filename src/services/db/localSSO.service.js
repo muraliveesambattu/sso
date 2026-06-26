@@ -1,8 +1,7 @@
 /**
  * Local SSO Service
  *
- * Drop-in replacement for firestoreSSO.service.js.
- * Reads all SSO config from src/data/ssoConfig.json instead of Firestore.
+ * JSON-backed SSO store. Reads all SSO config from src/data/ssoConfig.json.
  * sso_users are persisted back to the JSON file on create/update (JIT).
  *
  * To add a new company / domain — edit ssoConfig.json directly:
@@ -10,13 +9,12 @@
  *   - oidc_configurations or saml_configurations : add matching company_id entry
  *   - jit_mappings      : add group and default mapping rows for the new company
  *
- * Exported API is identical to firestoreSSO.service.js — callers need no changes
- * other than updating the require() path.
+ * Exported API matches the Postgres store, so callers (ssoDataService) can
+ * switch backends without any code changes.
  */
 
 const fs   = require('fs');
 const { logger } = require('../../config/logger');
-const { defaults } = require('../../config/constants');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -162,87 +160,6 @@ const updateUser = async (userId, updates) => {
   persist();
 };
 
-// ── Admin: save / upsert SSO config (mirrors postgresSSO.saveSsoConfig) ──────
-
-const saveSsoConfig = async ({
-  company_id: proposed_company_id, protocol, idp, domains, tenant_id,
-  client_id, auth_method, client_secret, redirect_uri,
-  sso_url, certificate, cert_expiry,
-  jit_enabled, jit_mappings,
-}) => {
-  const domainLower = domains.toLowerCase();
-
-  // Reuse existing company_id if the domain is already configured
-  const existing   = data.sso_integrations.find((r) => r.domains === domainLower);
-  const company_id = existing ? existing.company_id : proposed_company_id;
-
-  // 1 — upsert sso_integrations
-  const integration = {
-    id:              `${company_id}_${domainLower.replace(/\./g, '_')}`,
-    company_id,
-    domains:         domainLower,
-    protocol,
-    sso_status:      'active',
-    idp:             idp || 'microsoft_entra',
-    entra_tenant_id: tenant_id,
-    jit_enabled:     !!jit_enabled,
-  };
-  const intIdx = data.sso_integrations.findIndex((r) => r.company_id === company_id);
-  if (intIdx === -1) data.sso_integrations.push(integration);
-  else data.sso_integrations[intIdx] = { ...data.sso_integrations[intIdx], ...integration };
-
-  // 2 — upsert protocol-specific config
-  if (protocol === 'oidc') {
-    const oidc = {
-      id: company_id,
-      company_id,
-      client_id,
-      client_auth_method: auth_method,
-      client_secret:      client_secret || null,
-      scope:              defaults.OIDC_SCOPE,
-      redirect_uri:       redirect_uri || defaults.OIDC_REDIRECT_URI,
-    };
-    const idx = data.oidc_configurations.findIndex((r) => r.company_id === company_id);
-    if (idx === -1) data.oidc_configurations.push(oidc);
-    else data.oidc_configurations[idx] = { ...data.oidc_configurations[idx], ...oidc };
-  }
-
-  if (protocol === 'saml') {
-    const saml = {
-      id: company_id,
-      company_id,
-      entity_id:   defaults.SAML_ENTITY_ID,
-      sso_url,
-      acs_url:     defaults.SAML_ACS_URL,
-      certificate: certificate || null,
-      cert_expiry: cert_expiry || null,
-    };
-    const idx = data.saml_configurations.findIndex((r) => r.company_id === company_id);
-    if (idx === -1) data.saml_configurations.push(saml);
-    else data.saml_configurations[idx] = { ...data.saml_configurations[idx], ...saml };
-  }
-
-  // 3 — replace jit_mappings for this company
-  data.jit_mappings = data.jit_mappings.filter((m) => m.company_id !== company_id);
-  if (jit_enabled && jit_mappings?.length) {
-    jit_mappings
-      .filter((m) => m.zdna_role && m.mapping_source)
-      .forEach((m, i) => {
-        data.jit_mappings.push({
-          company_id,
-          mapping_source: m.mapping_source,
-          mapping_value:  m.mapping_value || null,
-          role_id:        m.zdna_role,
-          priority:       i + 1,
-          status:         'active',
-        });
-      });
-  }
-
-  persist();
-  logger.info(`[LOCAL] SSO config saved | company_id: ${company_id}`);
-};
-
 // ── Admin: retrieve full SSO config (secrets masked) ─────────────────────────
 
 const getSsoConfigDetails = async ({ company_id, domain }) => {
@@ -312,7 +229,7 @@ const invalidateDomainCache = (domain) => {
   data = loadData();
 };
 
-// ── Exports (identical to firestoreSSO.service.js) ────────────────────────────
+// ── Exports (match the Postgres store) ────────────────────────────────────────
 
 module.exports = {
   // SSO integrations
@@ -332,7 +249,6 @@ module.exports = {
   createUser,
   updateUser,
   // Admin
-  saveSsoConfig,
   getSsoConfigDetails,
   setSsoStatus,
   deleteSsoConfig,

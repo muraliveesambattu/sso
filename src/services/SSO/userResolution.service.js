@@ -6,8 +6,6 @@
  *
  *   JIT ON  → auto-create user on first login; re-sync roles on every login
  *   JIT OFF → verify user is pre-provisioned; allow or deny with 403
- *
- * Uses in-memory mock data (ssoData.json) — swap with DB queries for production.
  */
 
 const crypto = require('crypto');
@@ -102,7 +100,7 @@ const resolveRoles = async (companyId, groups) => {
  * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
  */
 const resolveUser = async (companyId, claims, protocol) => {
-  // Step 1: Get jit_enabled for this company from Firestore
+  // Step 1: Get jit_enabled for this company
   const integration = await getSsoIntegrationByCompanyId(companyId);
 
   if (!integration) {
@@ -142,7 +140,7 @@ const resolveUser = async (companyId, claims, protocol) => {
     let action;
 
     if (!user) {
-      // First login — create user in Firestore
+      // First login — create user
       user = await createUser({
         user_id:         crypto.randomUUID(),
         company_id:      companyId,
@@ -193,7 +191,7 @@ const resolveUser = async (companyId, claims, protocol) => {
     throw err;
   }
 
-  // Step D: Collect role name and id from Firestore, then trigger login
+  // Step D: Collect role name and id, then trigger login
   const roles = await getRolesByIds(user.roles || []);
   logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
 

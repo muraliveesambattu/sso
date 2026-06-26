@@ -50,7 +50,7 @@ const resolveEnvRef = (val) => {
   return val;
 };
 
-// Finds the active SSO integration for a domain — now reads from Firestore
+// Finds the active SSO integration for a domain
 const lookupSsoConfig = async (domain) => {
   const integration = await getSsoIntegrationByDomain(domain);
   if (!integration) return null;

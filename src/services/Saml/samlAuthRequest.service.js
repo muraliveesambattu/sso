@@ -1,55 +1,3 @@
-// const crypto = require('crypto');
-// const zlib = require('zlib');
-
-// const generateAuthRequestXml = (config,authnRequestId) => {
-//     const issueInstant = new Date().toISOString();
-//     return `<samlp:AuthnRequest
-//             xmlns:samlp="urn:oasiss:name:tc:SAML:2.0:protocol"
-//             xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
-//             ID="${authnRequestId}
-//             Version = "2.0"
-//             IssueInstant ="${issueInstant}"
-//             Destination="${config.sso_url}"
-//             AssertionConsumerServiceURL="${config.acs_url}"
-//             ProtocolBinding = "urn:oasis:name:tc:SAML:2.0:bindings:HTTP-POST">
-//             <saml:Issuer>${config.entity_id}</saml:Issuer>
-//             <samlp:NameIDPolicy
-//                 Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
-//                 AllowCreate="true"/>
-//             </samlp:AuthnRequest>`;
-// };
-
-// const buildSamlRedirecttUrl = (config,session,sessionID) =>
-// {
-//     return new Promise((resolve,reject)=>
-//     {
-//         const authnRequestId = `_zdna_${crypto.randomUUID()}`;
-//             session[`sso:saml:request:${sessionID}`] = {
-//             authnRequestId,
-//             timeStamp:Date.now(),
-//             ssoContext:{
-//                 entity_id:config.entity_id,
-//                 acs_url:config.acs_url,
-//                 sso_url:config.sso_url,
-//             }
-//         };
-
-//         const xml = generateAuthRequestXml(config,authnRequestId);
-//         zlib.deflateRaw(Buffer.from(xml,'utf-8'),(err,compressed)=>{
-//             if(err) return reject(err);
-
-//             const base64 = compressed.toString('base64');
-//             const urlEncoded = encodeURIComponent(base64);
-//             const relayState = encodeURIComponent(sessionID);
-//             const redirectUrl = `${config.sso_url}?SAMLRequest=${urlEncoded}&RelayState=${relayState}`;
-//             resolve(redirectUrl);
-//         });
-//     })
-// }
-
-// module.exports = {buildSamlRedirecttUrl};
-
-
 const crypto = require('crypto');
 const { logger } = require('../../config/logger');
 const zlib   = require('zlib');
@@ -62,16 +10,16 @@ const SESSION_TTL_MS = 600000; // 10 minutes
 
 // SP private key for signing AuthnRequest (HTTP-Redirect binding)
 // Key is loaded once at startup — avoids repeated disk reads.
-// Priority: 1) file on disk  2) SP_CERT_PRIVATE_KEY_B64 env var (base64-encoded PEM)
+// Priority: 1) file on disk  2) SP_PRIVATE_KEY_B64 env var (base64-encoded PEM)
 const SP_PRIVATE_KEY_PATH = path.join(__dirname, '../../../certs/zdna-sso-client.key');
 let spPrivateKey = null;
 try {
   spPrivateKey = fs.readFileSync(SP_PRIVATE_KEY_PATH, 'utf8');
   logger.debug('[SAML] SP private key loaded from file — AuthnRequest signing enabled');
 } catch {
-  if (process.env.SP_CERT_PRIVATE_KEY_B64) {
-    spPrivateKey = Buffer.from(process.env.SP_CERT_PRIVATE_KEY_B64, 'base64').toString('utf8');
-    logger.debug('[SAML] SP private key loaded from SP_CERT_PRIVATE_KEY_B64 env var — AuthnRequest signing enabled');
+  if (process.env.SP_PRIVATE_KEY_B64) {
+    spPrivateKey = Buffer.from(process.env.SP_PRIVATE_KEY_B64, 'base64').toString('utf8');
+    logger.debug('[SAML] SP private key loaded from SP_PRIVATE_KEY_B64 env var — AuthnRequest signing enabled');
   } else {
     logger.warn('[SAML] SP private key not found — AuthnRequest will be unsigned');
   }

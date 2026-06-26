@@ -121,7 +121,7 @@ describe('localSSO.service', () => {
     expect(service.mocks.writeFileSync).toHaveBeenCalledTimes(1);
   });
 
-  test('saves configs, masks secrets in details, updates status, deletes config, and reloads data', async () => {
+  test('masks secrets in details, updates status, deletes config, and reloads data', async () => {
     const reloadedData = {
       sso_integrations: [{ company_id: 'company-9', domains: 'reload.com', protocol: 'oidc', sso_status: 'active' }],
       oidc_configurations: [],
@@ -143,17 +143,6 @@ describe('localSSO.service', () => {
 
     service.mocks.readFileSync.mockReturnValue(JSON.stringify(reloadedData));
 
-    await service.saveSsoConfig({
-      company_id: 'new-company',
-      protocol: 'oidc',
-      domains: 'example.com',
-      client_id: 'client-new',
-      auth_method: 'client_secret_post',
-      client_secret: 'secret-new',
-      jit_enabled: true,
-      jit_mappings: [{ mapping_source: 'default', zdna_role: 'role-viewer' }],
-    });
-
     const details = await service.getSsoConfigDetails({ company_id: 'company-1' });
     expect(details.oidc_config.client_secret_set).toBe(true);
     expect(details.oidc_config.client_secret).toBeUndefined();
@@ -167,26 +156,16 @@ describe('localSSO.service', () => {
     );
   });
 
-  test('saves SAML configs, returns domain-based details, and false for missing status/delete targets', async () => {
+  test('returns domain-based SAML details, and false for missing status/delete targets', async () => {
     const service = loadLocalService({
       initialData: {
-        sso_integrations: [],
+        sso_integrations: [{ company_id: 'company-saml', domains: 'saml.example.com', protocol: 'saml', sso_status: 'active' }],
         oidc_configurations: [],
-        saml_configurations: [],
+        saml_configurations: [{ company_id: 'company-saml', certificate: 'cert-value', cert_expiry: '2029-01-01T00:00:00Z' }],
         jit_mappings: [],
         zdna_roles: [],
         sso_users: [],
       },
-    });
-
-    await service.saveSsoConfig({
-      company_id: 'company-saml',
-      protocol: 'saml',
-      domains: 'saml.example.com',
-      sso_url: 'https://login.microsoftonline.com/tenant/saml2',
-      certificate: 'cert-value',
-      cert_expiry: '2029-01-01T00:00:00Z',
-      jit_enabled: false,
     });
 
     await expect(service.getSsoConfigDetails({ domain: 'saml.example.com' })).resolves.toEqual(
