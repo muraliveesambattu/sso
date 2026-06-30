@@ -20,6 +20,24 @@ const { usePostgres } = require('../config/dataSource');
 
 const VALID_FLAGS = ['sso_enabled', 'jit_enabled'];
 
+// ── Firestore read ────────────────────────────────────────────────────────────
+// Collection: feature_flags / doc: <companyId> / fields: { sso_enabled, jit_enabled }
+const getFlagFromFirestore = async (companyId, flagName) => {
+  try {
+    const admin = require('firebase-admin');
+    const db = admin.firestore();
+    const doc = await db.collection('feature_flags').doc(companyId).get();
+    if (!doc.exists) return null;
+    const data = doc.data();
+    return data[flagName] !== undefined ? data[flagName] : null;
+  } catch (err) {
+    logger.warn('Firestore feature flag read failed — falling back to DB', {
+      action: 'feature_flag_firestore_error', flag: flagName, error: err.message,
+    });
+    return null;
+  }
+};
+
 // ── DB read ───────────────────────────────────────────────────────────────────
 const getFlagFromDb = async (companyId, flagName) => {
   if (!usePostgres) return null; // JSON fallback — no DB
@@ -88,14 +106,21 @@ const isEnabled = async (companyId, flagName) => {
     return false;
   }
 
-  // 2. Per-company DB flag
+  // 2. Firestore — real-time, per-company
+  const firestoreValue = await getFlagFromFirestore(companyId, flagName);
+  if (firestoreValue !== null) {
+    logger.debug('Feature flag from Firestore', { action: 'flag_firestore', flag: flagName, company_id: companyId, enabled: firestoreValue });
+    return firestoreValue;
+  }
+
+  // 3. Per-company DB flag
   const dbValue = await getFlagFromDb(companyId, flagName);
   if (dbValue !== null) {
     logger.debug('Feature flag from DB', { action: 'flag_db', flag: flagName, company_id: companyId, enabled: dbValue });
     return dbValue;
   }
 
-  // 3. Default — enabled
+  // 4. Default — enabled
   logger.debug('Feature flag using default (true)', { action: 'flag_default', flag: flagName, company_id: companyId });
   return true;
 };

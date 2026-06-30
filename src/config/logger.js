@@ -19,6 +19,14 @@ const { createLogger, format, transports } = require('winston');
 const IS_PROD = process.env.NODE_ENV === 'production';
 const LOG_LEVEL = process.env.LOG_LEVEL || (IS_PROD ? 'info' : 'debug');
 
+// Suppress raw console.* calls in production — all logging must go through logger
+if (IS_PROD) {
+  console.log   = () => {};
+  console.info  = () => {};
+  console.warn  = () => {};
+  console.debug = () => {};
+}
+
 // ── PII Masking ───────────────────────────────────────────────────────────────
 // Mask email and OID fields in production to protect user privacy
 const maskPii = format((info) => {
