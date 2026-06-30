@@ -25,6 +25,7 @@ const errorHandler   = require('./src/middlewares/errorHandler');
 const { globalLimiter }  = require('./src/middlewares/rateLimiter');
 const { healthCheck }    = require('./src/controllers/health.controller');
 const { requireAdminKey } = require('./src/middlewares/adminAuth.middleware');
+const { usePostgres }    = require('./src/config/dataSource');
 
 const app = express();
 
@@ -133,11 +134,35 @@ if (require.main === module) {
     logger.info(`SSO Microservice started`, { action: 'server_start', port: PORT, node_env: process.env.NODE_ENV || 'development' })
   );
 
-  // ── DB Connection Check ─────────────────────────────────────────────────────
-  const sequelizeCheck = require('./src/config/db');
-  sequelizeCheck.authenticate()
-    .then(() => logger.info('Database connected successfully', { action: 'db_connected' }))
-    .catch(err => logger.error('Database connection failed', { action: 'db_connection_failed', error: err.message }));
+  // ── DB Connection Check — retry with exponential back-off ───────────────────
+  // A brief PostgreSQL blip at startup would silently degrade all DB-backed SSO
+  // lookups for the lifetime of the instance without retry protection.
+  if (usePostgres) {
+    const sequelizeCheck = require('./src/config/db');
+    (async () => {
+      const MAX_ATTEMPTS = 5;
+      let delay = 1000;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          await sequelizeCheck.authenticate();
+          logger.info('Database connected successfully', { action: 'db_connected', attempt });
+          return;
+        } catch (err) {
+          if (attempt === MAX_ATTEMPTS) {
+            logger.error('Database connection failed after all retries — DB-backed SSO degraded', {
+              action: 'db_connection_failed', error: err.message, attempts: MAX_ATTEMPTS,
+            });
+            return;
+          }
+          logger.warn(`DB connect attempt ${attempt}/${MAX_ATTEMPTS} failed — retrying in ${delay}ms`, {
+            action: 'db_connect_retry', attempt, delay, error: err.message,
+          });
+          await new Promise(r => setTimeout(r, delay));
+          delay = Math.min(delay * 2, 30000);
+        }
+      }
+    })();
+  }
 
   // ── Graceful Shutdown ───────────────────────────────────────────────────────
   // On SIGTERM (Cloud Run / process stop):

@@ -16,7 +16,8 @@ let spPrivateKey = null;
 try {
   spPrivateKey = fs.readFileSync(SP_PRIVATE_KEY_PATH, 'utf8');
   logger.debug('[SAML] SP private key loaded from file — AuthnRequest signing enabled');
-} catch {
+} catch (keyReadErr) {
+  logger.debug('[SAML] SP private key file not found — falling back to env var', { error: keyReadErr.message });
   if (process.env.SP_PRIVATE_KEY_B64) {
     spPrivateKey = Buffer.from(process.env.SP_PRIVATE_KEY_B64, 'base64').toString('utf8');
     logger.debug('[SAML] SP private key loaded from SP_PRIVATE_KEY_B64 env var — AuthnRequest signing enabled');
@@ -52,6 +53,9 @@ const signSamlRedirectQuery = (samlRequest, relayState) => {
 
 // In-memory store keyed by authnRequestId.
 // Avoids reliance on session cookies which are blocked on cross-site SAML POST callbacks (sameSite: lax).
+// NOTE: per-instance only — under horizontal scaling, /saml/callback must land on the same
+// instance that processed /saml/auth. For multi-instance production, replace with a shared
+// store (Redis / Firestore with TTL). Current Cloud Run min-instances=1 makes this acceptable.
 const samlRequestStore = new Map();
 
 const generateAuthnRequestXml = (authnRequestId, entityId, acsUrl, ssoUrl) => {
@@ -71,7 +75,7 @@ logger.debug('[XML_GENERATION_PARAMS]', {
   return `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${authnRequestId}" Version="2.0" IssueInstant="${issueInstant}" Destination="${ssoUrl}" AssertionConsumerServiceURL="${acsUrl}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>${entityId}</saml:Issuer><samlp:NameIDPolicy Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" AllowCreate="true"/></samlp:AuthnRequest>`;
 };
 
-const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId) => {
+const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId, companyId) => {
   try {
     // Generate unique AuthnRequest ID
     const authnRequestId = `_zdna_${crypto.randomUUID()}`;
@@ -88,8 +92,9 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
       authnRequestId,
       timestamp: Date.now(),
       ssoContext: {
-        entity_id: entityId,
-        acs_url: acsUrl
+        entity_id:  entityId,
+        acs_url:    acsUrl,
+        company_id: companyId,
       }
     });
 

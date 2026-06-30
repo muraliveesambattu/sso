@@ -24,6 +24,7 @@ const resolveAuthCredential = (oidcConfig, codeVerifier, tenantId) => {
   switch (oidcConfig.client_auth_method) {
     case 'client_secret_post':
     case 'client_secret':
+    case 'secret':
       return resolveEnvRef(oidcConfig.client_secret);
     case 'private_key_jwt':
       return generateJwtAssertion(

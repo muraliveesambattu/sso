@@ -20,7 +20,7 @@ const DOMAIN_RE = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const UUID_RE   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const URL_RE    = /^https?:\/\/.+/;
 
-const isCertAuth = (authMethod) => authMethod === 'private_key_jwt' || authMethod === 'certificate';
+const { isCertAuth } = require('../../utils/shared/authMethod.util');
 
 const fieldError = (message, code = 'MISSING_REQUIRED_FIELDS') =>
   Object.assign(new Error(message), { statusCode: 400, code });
@@ -62,22 +62,72 @@ const deriveEntraTenantId = (tenant_id, sso_url) => {
 
 // For the OIDC Client Certificate (private_key_jwt) method, extract the private
 // key + SHA-1 thumbprint from the uploaded .pfx/.p12 so they can be persisted.
-const extractCert = (protocol, auth_method, certificate, certificate_password) => {
+const extractCert = async (protocol, auth_method, certificate, certificate_password) => {
   if (protocol !== 'oidc' || !isCertAuth(auth_method)) {
     return { private_key_b64: null, client_cert_thumbprint: null };
   }
-  const { privateKeyB64, thumbprintHex } = extractFromPkcs12(certificate, certificate_password);
+  const { privateKeyB64, thumbprintHex } = await extractFromPkcs12(certificate, certificate_password);
   logger.debug('[SAVE-SSO] Extracted private key + thumbprint from PKCS#12');
   return { private_key_b64: privateKeyB64, client_cert_thumbprint: thumbprintHex };
 };
 
+// ── Row builders — each owns exactly one table's shape ────────────────────────
+
+const buildIntegrationRow = ({ company_id, domains, protocol, idp, entraTenantId,
+  owner_tenant_id, owner_company_name, jit_enabled }) => ({
+  id:                 `${company_id}_${domains.replace(/\./g, '_')}`,
+  company_id,
+  domains:            domains.toLowerCase(),
+  protocol,
+  sso_status:         DEFAULTS.SSO_STATUS,
+  idp:                idp || DEFAULTS.IDP,
+  entra_tenant_id:    entraTenantId,
+  owner_tenant_id:    owner_tenant_id || null,
+  owner_company_name: owner_company_name || null,
+  jit_enabled:        !!jit_enabled,
+});
+
+const buildOidcRow = ({ company_id, client_id, auth_method, client_secret,
+  redirect_uri, private_key_b64, client_cert_thumbprint }) => ({
+  id:                    company_id,
+  company_id,
+  client_id,
+  client_auth_method:    auth_method,
+  client_secret:         client_secret ? encrypt(client_secret) : null,
+  // Client Certificate (private_key_jwt) — store encrypted base64(PEM) key + thumbprint
+  private_key_enc:       private_key_b64 ? encrypt(private_key_b64) : null,
+  client_cert_thumbprint: client_cert_thumbprint || null,
+  scope:                 DEFAULTS.OIDC_SCOPE,
+  redirect_uri:          redirect_uri || DEFAULTS.OIDC_REDIRECT_URI,
+});
+
+const buildSamlRow = ({ company_id, entity_id, sso_url, acs_url, certificate }) => ({
+  id:         company_id,
+  company_id,
+  entity_id:  entity_id || DEFAULTS.SAML_ENTITY_ID,
+  sso_url,
+  acs_url:    acs_url || DEFAULTS.SAML_ACS_URL,
+  certificate: certificate || null,
+});
+
+const buildJitRows = (company_id, jit_mappings) =>
+  jit_mappings
+    .filter(m => m.zdna_role && m.mapping_source)
+    .map((m, i) => ({
+      id:             `jit-${company_id}-${i}`,
+      company_id,
+      mapping_source: m.mapping_source,
+      mapping_value:  m.mapping_value || null,
+      role_id:        m.zdna_role,
+      priority:       i + 1,
+      status:         DEFAULTS.SSO_STATUS,
+    }));
+
 // JSON fallback — append to ssoConfig.json (used when no DB is configured, and
 // as a safety net when PostgreSQL is unavailable). Fully async so it never
 // blocks the event loop.
-const saveToJson = async ({ company_id, protocol, idp, domains, entraTenantId,
-  owner_tenant_id, owner_company_name, client_id, auth_method, client_secret,
-  redirect_uri, sso_url, entity_id, acs_url, certificate,
-  private_key_b64, client_cert_thumbprint, jit_enabled, jit_mappings }) => {
+const saveToJson = async (params) => {
+  const { company_id, protocol, domains, jit_enabled, jit_mappings } = params;
 
   let data;
   try {
@@ -96,59 +146,22 @@ const saveToJson = async ({ company_id, protocol, idp, domains, entraTenantId,
     }
   }
 
-  // Remove any existing entry for this domain
   data.sso_integrations = (data.sso_integrations || []).filter(r => r.domains !== domains.toLowerCase());
-  data.sso_integrations.push({
-    id: `${company_id}_${domains.replace(/\./g, '_')}`,
-    company_id, domains: domains.toLowerCase(),
-    protocol, sso_status: DEFAULTS.SSO_STATUS,
-    idp: idp || DEFAULTS.IDP,
-    entra_tenant_id: entraTenantId,
-    owner_tenant_id: owner_tenant_id || null,
-    owner_company_name: owner_company_name || null,
-    jit_enabled: !!jit_enabled,
-  });
+  data.sso_integrations.push(buildIntegrationRow(params));
 
   if (protocol === 'oidc') {
     data.oidc_configurations = (data.oidc_configurations || []).filter(r => r.company_id !== company_id);
-    data.oidc_configurations.push({
-      id: company_id, company_id, client_id,
-      client_auth_method: auth_method,
-      client_secret: client_secret ? encrypt(client_secret) : null,
-      // Client Certificate (private_key_jwt) — store encrypted base64(PEM) key + thumbprint
-      private_key_enc:        private_key_b64 ? encrypt(private_key_b64) : null,
-      client_cert_thumbprint: client_cert_thumbprint || null,
-      scope: DEFAULTS.OIDC_SCOPE,
-      redirect_uri: redirect_uri || DEFAULTS.OIDC_REDIRECT_URI,
-    });
+    data.oidc_configurations.push(buildOidcRow(params));
   }
 
   if (protocol === 'saml') {
     data.saml_configurations = (data.saml_configurations || []).filter(r => r.company_id !== company_id);
-    data.saml_configurations.push({
-      id: company_id, company_id,
-      entity_id: entity_id || DEFAULTS.SAML_ENTITY_ID,
-      sso_url,
-      acs_url: acs_url || DEFAULTS.SAML_ACS_URL,
-      certificate: certificate || null,
-    });
+    data.saml_configurations.push(buildSamlRow(params));
   }
 
   if (jit_enabled && Array.isArray(jit_mappings) && jit_mappings.length) {
     data.jit_mappings = (data.jit_mappings || []).filter(r => r.company_id !== company_id);
-    jit_mappings
-      .filter(m => m.zdna_role && m.mapping_source)
-      .forEach((m, i) => {
-        data.jit_mappings.push({
-          id: `jit-${company_id}-${i}`,
-          company_id,
-          mapping_source: m.mapping_source,
-          mapping_value:  m.mapping_value || null,
-          role_id:        m.zdna_role,
-          priority:       i + 1,
-          status:         DEFAULTS.SSO_STATUS,
-        });
-      });
+    data.jit_mappings.push(...buildJitRows(company_id, jit_mappings));
   }
 
   await fsp.writeFile(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf8');
@@ -163,20 +176,12 @@ const saveToJson = async ({ company_id, protocol, idp, domains, entraTenantId,
 // it pulls in Sequelize models, and hoisting it to module scope would load the
 // ORM even on the JSON-only path. It is only reached when usePostgres is true.
 const saveToPostgres = async (proposedCompanyId, fields) => {
-  try {
-    const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
-    await pgSave({ company_id: proposedCompanyId, ...fields });
-    const saved = await getSsoIntegrationByDomain(fields.domains);
-    const company_id = saved ? saved.company_id : proposedCompanyId;
-    logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${company_id}`);
-    return company_id;
-  } catch (pgErr) {
-    logger.error('[SAVE-SSO] PostgreSQL unavailable — falling back to JSON store', {
-      action: 'save_sso_pg_fallback', error: pgErr.message,
-    });
-    await saveToJson({ company_id: proposedCompanyId, ...fields });
-    return proposedCompanyId;
-  }
+  const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
+  await pgSave({ company_id: proposedCompanyId, ...fields });
+  const saved = await getSsoIntegrationByDomain(fields.domains);
+  const company_id = saved ? saved.company_id : proposedCompanyId;
+  logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${company_id}`);
+  return company_id;
 };
 
 /**
@@ -213,14 +218,15 @@ const saveSsoConfig = async (payload) => {
     owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
     sso_url, entity_id, acs_url, certificate, certificate_password,
+    sign_auth, keep_existing_cert,
     jit_enabled, jit_mappings,
   } = payload;
 
   validateRequiredFields(payload);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
-  const { private_key_b64, client_cert_thumbprint } =
-    extractCert(protocol, auth_method, certificate, certificate_password);
+  const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =
+    await extractCert(protocol, auth_method, certificate, certificate_password);
 
   const proposedCompanyId = `zdna-${domains.replace(/[.\s]/g, '-')}-${Date.now()}`;
 
@@ -230,7 +236,9 @@ const saveSsoConfig = async (payload) => {
     owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
     sso_url, entity_id, acs_url, certificate,
-    private_key_b64, client_cert_thumbprint,
+    sign_auth: sign_auth || false,
+    private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
+    keep_existing_cert: !!keep_existing_cert,
     jit_enabled, jit_mappings,
   };
 

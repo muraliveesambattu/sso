@@ -12,6 +12,7 @@ const domainCheckLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   handler: (req, res) => {
     logger.debug('[RATE_LIMIT_EXCEEDED]', JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -39,6 +40,7 @@ const samlCallbackLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   handler: (req, res) => {
     logger.debug('[RATE_LIMIT_EXCEEDED]', JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -65,7 +67,8 @@ const globalLimiter = rateLimit({
     code: 'RATE_LIMIT_EXCEEDED'
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  validate: { trustProxy: false }
 });
 
 module.exports = {

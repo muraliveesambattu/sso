@@ -5,7 +5,7 @@ const { auditSsoConfigSaved } = require('../services/audit/audit.service');
 // Trim identifier fields so stray copy-paste whitespace can't corrupt the
 // stored tenant_id / client_id / domain (which break issuer/audience checks
 // and create duplicate rows that differ only by a space).
-const t = (v) => (typeof v === 'string' ? v.trim() : v);
+const trimStr = (v) => (typeof v === 'string' ? v.trim() : v);
 
 // The frontend sends `domains` as an array (e.g. ["zebra.com"]); the backend
 // works with a single domain string. Take the first entry when it's an array.
@@ -16,16 +16,17 @@ const handleSaveSsoConfig = async (req, res, next) => {
     const {
       protocol, idp, auth_method, client_secret,
       certificate, certificate_password, jit_enabled, jit_mappings,
+      keep_existing_cert, sign_auth,
     } = req.body;
-    const domains      = t(firstDomain(req.body.domains))?.toLowerCase();
-    const tenant_id    = t(req.body.tenant_id);
-    const client_id    = t(req.body.client_id);
-    const redirect_uri = t(req.body.redirect_uri);
-    const sso_url      = t(req.body.sso_url);
-    const entity_id    = t(req.body.entity_id);   // SAML — SP entity / identifier
-    const acs_url      = t(req.body.acs_url);      // SAML — assertion consumer service URL
-    const owner_tenant_id    = t(req.body.owner_tenant_id);     // admin who configured this SSO
-    const owner_company_name = t(req.body.owner_company_name);  // their company name
+    const domains      = trimStr(firstDomain(req.body.domains))?.toLowerCase();
+    const tenant_id    = trimStr(req.body.tenant_id);
+    const client_id    = trimStr(req.body.client_id);
+    const redirect_uri = trimStr(req.body.redirect_uri);
+    const sso_url      = trimStr(req.body.sso_url);
+    const entity_id    = trimStr(req.body.entity_id);   // SAML — SP entity / identifier
+    const acs_url      = trimStr(req.body.acs_url);      // SAML — assertion consumer service URL
+    const owner_tenant_id    = trimStr(req.body.owner_tenant_id);     // admin who configured this SSO
+    const owner_company_name = trimStr(req.body.owner_company_name);  // their company name
 
     logger.info('Save SSO config request', { action: 'sso_save', protocol, domains, jit_enabled, ip: req.ip });
 
@@ -33,7 +34,9 @@ const handleSaveSsoConfig = async (req, res, next) => {
       protocol, idp, domains, tenant_id,
       owner_tenant_id, owner_company_name,
       client_id, auth_method, client_secret, redirect_uri,
-      sso_url, entity_id, acs_url, certificate, certificate_password, jit_enabled, jit_mappings,
+      sso_url, entity_id, acs_url, certificate, certificate_password,
+      sign_auth, keep_existing_cert,
+      jit_enabled, jit_mappings,
     });
 
     // Audit log — who saved the config, from which IP

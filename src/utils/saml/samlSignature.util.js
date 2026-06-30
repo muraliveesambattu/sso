@@ -3,11 +3,11 @@ const { SignedXml }  = require('xml-crypto');
 const { logger }     = require('../../config/logger');
 
 const formatCertAsPem = (cert) => {
-  let c = (cert || '').trim();
+  let certStr = (cert || '').trim();
 
   // Strip a data-URL prefix if present (data:...;base64,XXXX).
-  if (c.includes(',') && c.startsWith('data:')) {
-    c = c.slice(c.indexOf(',') + 1);
+  if (certStr.includes(',') && certStr.startsWith('data:')) {
+    certStr = certStr.slice(certStr.indexOf(',') + 1);
   }
 
   // Case 1: the stored value is base64 of the whole PEM file (the frontend's
@@ -15,7 +15,7 @@ const formatCertAsPem = (cert) => {
   // Decoding it yields the real PEM — use that directly. (Without this the PEM
   // body ends up being base64-of-PEM, and OpenSSL throws ERR_OSSL_ASN1_WRONG_TAG.)
   try {
-    const decoded = Buffer.from(c, 'base64').toString('utf-8');
+    const decoded = Buffer.from(certStr, 'base64').toString('utf-8');
     if (decoded.includes('-----BEGIN CERTIFICATE-----')) {
       return decoded.trim();
     }
@@ -25,12 +25,12 @@ const formatCertAsPem = (cert) => {
   }
 
   // Case 2: already a PEM string.
-  if (c.includes('-----BEGIN CERTIFICATE-----')) {
-    return c;
+  if (certStr.includes('-----BEGIN CERTIFICATE-----')) {
+    return certStr;
   }
 
   // Case 3: raw base64 DER (just the body) — wrap it in PEM headers.
-  const clean = c.replace(/\s/g, '');
+  const clean = certStr.replace(/\s/g, '');
   return `-----BEGIN CERTIFICATE-----\n${clean.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`;
 };
 
@@ -59,12 +59,12 @@ const verifyXmlSignature = (xml, certificate) => {
     throw err;
   }
 
-  const sig = new SignedXml({ publicCert: formatCertAsPem(certificate) });
-  sig.loadSignature(signature);
+  const signedXml = new SignedXml({ publicCert: formatCertAsPem(certificate) });
+  signedXml.loadSignature(signature);
 
   let isValid;
   try {
-    isValid = sig.checkSignature(xml);
+    isValid = signedXml.checkSignature(xml);
   } catch (sigErr) {
     const err = new Error(`XML signature verification failed: ${sigErr.message}`);
     err.statusCode = 400;

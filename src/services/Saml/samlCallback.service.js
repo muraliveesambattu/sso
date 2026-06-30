@@ -1,6 +1,6 @@
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 const { logger } = require('../../config/logger');
-const { getSamlConfigByAcsUrl } = require('../db/ssoDataService');
+const { getSamlConfig } = require('../db/ssoDataService');
 const { verifyXmlSignature }   = require('../../utils/saml/samlSignature.util');
 const { samlRequestStore }     = require('./samlAuthRequest.service');
 const { resolveUser }          = require('../SSO/userResolution.service');
@@ -150,7 +150,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const { ssoContext } = storedSession;
 
   // LAYER 6: Retrieve Certificate from the SSO store (NEVER expose to client)
-  const samlConfig = await getSamlConfigByAcsUrl(ssoContext.acs_url);
+  const samlConfig = await getSamlConfig(ssoContext.company_id);
 
   if (!samlConfig) {
     const err = new Error('SAML configuration not found');

@@ -143,15 +143,15 @@ const buildOidcResponse = async (config) => {
   };
 
   if (config.client_auth_method === 'none') {
-    // PKCE flow — backend owns code_verifier, never sent to client
-    const code_verifier  = crypto.randomBytes(32).toString('base64url');
-    const code_challenge = crypto
+    // PKCE flow — backend owns codeVerifier, never sent to client
+    const codeVerifier  = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto
       .createHash('sha256')
-      .update(code_verifier)
+      .update(codeVerifier)
       .digest('base64url');
 
-    storeEntry.code_verifier             = code_verifier;
-    responseConfig.code_challenge        = code_challenge;
+    storeEntry.code_verifier             = codeVerifier;
+    responseConfig.code_challenge        = codeChallenge;
     responseConfig.code_challenge_method = 'S256';
   }
 
@@ -177,7 +177,8 @@ const buildSamlResponse = async (config, session, sessionID) => {
     config.acs_url,
     config.sso_url,
     session,
-    sessionID
+    sessionID,
+    config.company_id
   );
 
   return {

@@ -20,7 +20,7 @@ const { logger } = require('../../config/logger');
  * @returns {{ privateKeyB64: string, thumbprintHex: string }}
  * @throws  {Error} statusCode 400 if the bundle/password is invalid
  */
-const extractFromPkcs12 = (base64Pfx, password) => {
+const extractFromPkcs12 = async (base64Pfx, password) => {
   if (!base64Pfx) {
     throw Object.assign(new Error('certificate (.pfx/.p12) is required for private_key_jwt'), {
       statusCode: 400, code: 'MISSING_CERTIFICATE',
@@ -30,6 +30,10 @@ const extractFromPkcs12 = (base64Pfx, password) => {
   // Accept either pure base64 or a data-URL ("data:...;base64,XXXX") — the
   // frontend's FileReader.readAsDataURL produces the latter. Strip the prefix.
   const pureB64 = base64Pfx.includes(',') ? base64Pfx.slice(base64Pfx.indexOf(',') + 1) : base64Pfx;
+
+  // Yield the event loop before CPU-bound forge operations so concurrent
+  // requests are not stalled for the duration of PKCS#12 parsing and crypto.
+  await new Promise(resolve => setImmediate(resolve));
 
   let p12;
   try {

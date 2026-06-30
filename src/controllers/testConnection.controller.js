@@ -5,7 +5,7 @@ const tcStore                 = require('../utils/shared/testConnectionStore');
 
 // Trim identifier fields so a stray copy-paste space can't corrupt the
 // Microsoft assertion (aud/iss), issuer validation, or domain lookups.
-const t = (v) => (typeof v === 'string' ? v.trim() : v);
+const trimStr = (v) => (typeof v === 'string' ? v.trim() : v);
 
 // The frontend sends `domains` as an array (e.g. ["zebra.com"]); the backend
 // works with a single domain string. Take the first entry when it's an array.
@@ -16,12 +16,12 @@ const handleTestConnection = async (req, res, next) => {
     const {
       protocol, auth_method, client_secret, certificate, certificate_password,
     } = req.body;
-    const tenant_id    = t(req.body.tenant_id);
-    const client_id    = t(req.body.client_id);
-    const sso_url      = t(req.body.sso_url);
-    const redirect_uri = t(req.body.redirect_uri);
-    const scope        = t(req.body.scope);
-    const domains      = t(firstDomain(req.body.domains))?.toLowerCase();
+    const tenant_id    = trimStr(req.body.tenant_id);
+    const client_id    = trimStr(req.body.client_id);
+    const sso_url      = trimStr(req.body.sso_url);
+    const redirect_uri = trimStr(req.body.redirect_uri);
+    const scope        = trimStr(req.body.scope);
+    const domains      = trimStr(firstDomain(req.body.domains))?.toLowerCase();
 
     if (!protocol) return res.status(400).json({ success: false, message: 'protocol is required' });
     // OIDC always needs tenant_id (used to build the Microsoft token/authorize URLs).

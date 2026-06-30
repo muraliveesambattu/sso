@@ -3,6 +3,7 @@ const http   = require('http');
 const crypto = require('crypto');
 const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 const { microsoft } = require('../../config/constants');
+const { isCertAuth }        = require('../../utils/shared/authMethod.util');
 
 const fetchJson = (url, options) =>
   new Promise((resolve, reject) => {
@@ -69,8 +70,6 @@ const testSamlDiscovery = async ({ tenant_id, sso_url }) => {
   return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
 };
 
-const isCertAuth = (authMethod) => authMethod === 'private_key_jwt' || authMethod === 'certificate';
-
 /**
  * Builds the browser-test session for OIDC.
  *
@@ -86,23 +85,23 @@ const isCertAuth = (authMethod) => authMethod === 'private_key_jwt' || authMetho
  * @returns {{ sessionRef: string, config: Object, _internal: Object }}
  *          config is frontend-safe; _internal holds secrets (stored server-side in tcStore).
  */
-const buildOidcTestSession = ({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password }) => {
+const buildOidcTestSession = async ({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password }) => {
   const sessionRef = crypto.randomUUID();
   const state      = crypto.randomUUID();
   const nonce      = crypto.randomUUID();
 
   // PKCE pair — only used when auth_method is 'none'
-  const code_verifier  = crypto.randomBytes(32).toString('base64url');
-  const code_challenge = crypto.createHash('sha256').update(code_verifier).digest('base64url');
+  const codeVerifier  = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 
   // Client Certificate (private_key_jwt) — extract key + thumbprint from the .pfx
   // so the callback can build the client_assertion (signed JWT) for Entra.
-  let private_key_b64 = null;
-  let client_cert_thumbprint = null;
+  let privateKeyB64          = null;
+  let clientCertThumbprint   = null;
   if (isCertAuth(auth_method)) {
-    const extracted = extractFromPkcs12(certificate, certificate_password);
-    private_key_b64        = extracted.privateKeyB64;
-    client_cert_thumbprint = extracted.thumbprintHex;
+    const extracted        = await extractFromPkcs12(certificate, certificate_password);
+    privateKeyB64          = extracted.privateKeyB64;
+    clientCertThumbprint   = extracted.thumbprintHex;
   }
 
   const callbackUri = redirect_uri || process.env.OIDC_REDIRECT_URI;
@@ -117,16 +116,16 @@ const buildOidcTestSession = ({ tenant_id, client_id, client_secret, auth_method
       scope:        scope || 'openid profile email',
       state,
       nonce,
-      ...(auth_method === 'none' && { code_challenge, code_challenge_method: 'S256' }),
+      ...(auth_method === 'none' && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),
     },
     _internal: {
       tenant_id,
       client_id,
       client_auth_method: auth_method,
       client_secret:      client_secret || null,
-      code_verifier:      auth_method === 'none' ? code_verifier : null,
-      private_key_b64,            // cert auth: base64(PEM) private key
-      client_cert_thumbprint,     // cert auth: SHA-1 hex thumbprint
+      code_verifier:      auth_method === 'none' ? codeVerifier : null,
+      private_key_b64:         privateKeyB64,       // cert auth: base64(PEM) private key
+      client_cert_thumbprint:  clientCertThumbprint, // cert auth: SHA-1 hex thumbprint
       redirect_uri:       callbackUri,
       state,
       nonce,
@@ -146,7 +145,7 @@ const testConnection = async (payload) => {
     if (!check.success) return check;
 
     // Phase 2 prep — browser popup session (sessionRef + state/nonce)
-    const session = buildOidcTestSession({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password });
+    const session = await buildOidcTestSession({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password });
 
     return {
       success: true,

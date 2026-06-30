@@ -13,16 +13,18 @@ const https  = require('https');
 const crypto = require('crypto');
 const { microsoft } = require('../../config/constants');
 
+const JWKS_TIMEOUT_MS = 10000;
+
 const fetchJwks = (tenantId) => {
   return new Promise((resolve, reject) => {
     const url = microsoft.jwksUrl(tenantId);
 
-    
     const options = {
-      rejectUnauthorized: process.env.NODE_ENV === 'production'
+      rejectUnauthorized: process.env.NODE_ENV === 'production',
+      timeout: JWKS_TIMEOUT_MS,
     };
 
-    https.get(url, options, (res) => {
+    const req = https.get(url, options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -33,7 +35,9 @@ const fetchJwks = (tenantId) => {
           reject(new Error(`Failed to parse JWKS response: ${err.message}`));
         }
       });
-    }).on('error', err => reject(new Error(`JWKS network error: ${err.message}`)));
+    });
+    req.on('error', err => reject(new Error(`JWKS network error: ${err.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('JWKS fetch timed out')); });
   });
 };
 

@@ -8,7 +8,8 @@
  *         jit_mappings, zdna_roles, sso_users
  */
 
-const crypto = require('crypto');
+const crypto    = require('crypto');
+const { Op }    = require('sequelize');
 const { logger } = require('../../config/logger');
 const { defaults } = require('../../config/constants');
 const {
@@ -103,7 +104,6 @@ const getJitMappings = async (companyId) => {
 const getRolesByIds = async (roleIds) => {
   if (!roleIds || roleIds.length === 0) return [];
   logger.debug(`[POSTGRES] Query zdna_roles | role_ids: ${roleIds.join(', ')}`);
-  const { Op } = require('sequelize');
   const rows = await ZdnaRole.findAll({ where: { role_id: { [Op.in]: roleIds } } });
   return rows.map(r => r.toJSON());
 };
@@ -151,17 +151,44 @@ const saveSsoConfig = async ({
   owner_tenant_id, owner_company_name,
   client_id, auth_method, client_secret, redirect_uri,
   sso_url, entity_id, acs_url, certificate, cert_expiry,
+  sign_auth,
   private_key_b64, client_cert_thumbprint,
+  keep_existing_cert,
   jit_enabled, jit_mappings,
 }) => {
   const sequelize = require('../../config/db');
-  const t = await sequelize.transaction();
+  const tx = await sequelize.transaction();
   try {
-    // 1 — check if domain already exists → reuse its company_id to avoid unique violation
+    // 1a — if this owner already has a config on a DIFFERENT domain, delete it first.
+    //      Enforces one SSO config per owner_tenant_id — prevents ghost rows where
+    //      the same admin owns multiple tenants after re-configuring.
+    if (owner_tenant_id) {
+      const ownerExisting = await SsoIntegration.findOne({
+        where: { owner_tenant_id },
+        transaction: tx,
+      });
+      if (ownerExisting && ownerExisting.domains !== domains.toLowerCase()) {
+        const oldCid = ownerExisting.company_id;
+        logger.info(`[POSTGRES] Owner already has config on ${ownerExisting.domains} — removing before save | old_company_id: ${oldCid}`, { action: 'owner_config_replaced' });
+        await JitMapping.destroy({ where: { company_id: oldCid }, transaction: tx });
+        await OidcConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
+        await SamlConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
+        await SsoIntegration.destroy({ where: { company_id: oldCid }, transaction: tx });
+      }
+    }
+
+    // 1b — check if domain already exists
     const existing = await SsoIntegration.findOne({
       where: { domains: domains.toLowerCase() },
-      transaction: t,
+      transaction: tx,
     });
+    // Reject if a DIFFERENT owner already owns this domain
+    if (existing && owner_tenant_id && existing.owner_tenant_id && existing.owner_tenant_id !== owner_tenant_id) {
+      const conflictErr = new Error('Domain is already configured by another organisation');
+      conflictErr.statusCode = 409;
+      conflictErr.code = 'DOMAIN_ALREADY_EXISTS';
+      throw conflictErr;
+    }
     const company_id = existing ? existing.company_id : proposed_company_id;
 
     // upsert sso_integrations (update if exists, insert if not)
@@ -175,7 +202,7 @@ const saveSsoConfig = async ({
       protocol,
       sso_status:      'active',
       jit_enabled:     !!jit_enabled,
-    }, { transaction: t });
+    }, { transaction: tx });
 
     // 2 — upsert protocol-specific config
     if (protocol === 'oidc') {
@@ -183,9 +210,18 @@ const saveSsoConfig = async ({
       const encryptedSecret = client_secret ? encrypt(client_secret) : null;
       logger.debug(`[POSTGRES] Client secret encrypted for storage | company_id: ${company_id}`);
 
-      // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest
-      const encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
-      if (encryptedPrivateKey) {
+      // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest.
+      // When keep_existing_cert=true and no new key was extracted, reuse what's in the DB.
+      let encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
+      let resolvedThumbprint  = client_cert_thumbprint || null;
+      if (keep_existing_cert && !private_key_b64) {
+        const existingOidc = await OidcConfiguration.findOne({ where: { company_id }, transaction: tx });
+        if (existingOidc) {
+          encryptedPrivateKey = existingOidc.private_key_enc;
+          resolvedThumbprint  = existingOidc.client_cert_thumbprint;
+          logger.debug(`[POSTGRES] Reusing existing private key for company_id: ${company_id}`);
+        }
+      } else if (encryptedPrivateKey) {
         logger.debug(`[POSTGRES] Private key encrypted for storage | company_id: ${company_id}`);
       }
 
@@ -195,25 +231,35 @@ const saveSsoConfig = async ({
         client_auth_method:     auth_method,
         client_secret_enc:      encryptedSecret,
         private_key_enc:        encryptedPrivateKey,
-        client_cert_thumbprint: client_cert_thumbprint || null,
+        client_cert_thumbprint: resolvedThumbprint,
         scope:                  defaults.OIDC_SCOPE,
         redirect_uri:           redirect_uri || defaults.OIDC_REDIRECT_URI,
-      }, { transaction: t });
+      }, { transaction: tx });
     }
 
     if (protocol === 'saml') {
+      // When keep_existing_cert=true and no new cert uploaded, reuse the existing IdP cert
+      let resolvedCert = certificate || null;
+      if (keep_existing_cert && !certificate) {
+        const existingSaml = await SamlConfiguration.findOne({ where: { company_id }, transaction: tx });
+        if (existingSaml) {
+          resolvedCert = existingSaml.certificate;
+          logger.debug(`[POSTGRES] Reusing existing SAML cert for company_id: ${company_id}`);
+        }
+      }
       await SamlConfiguration.upsert({
         company_id,
         entity_id:   entity_id || defaults.SAML_ENTITY_ID,
         sso_url,
         acs_url:     acs_url   || defaults.SAML_ACS_URL,
-        certificate: certificate || null,
+        certificate: resolvedCert,
         cert_expiry: cert_expiry || null,
-      }, { transaction: t });
+        sign_auth:   sign_auth  || false,
+      }, { transaction: tx });
     }
 
     // 3 — replace jit_mappings
-    await JitMapping.destroy({ where: { company_id }, transaction: t });
+    await JitMapping.destroy({ where: { company_id }, transaction: tx });
     if (jit_enabled && jit_mappings?.length) {
       const rows = jit_mappings
         .filter(m => m.zdna_role && m.mapping_source)
@@ -225,13 +271,13 @@ const saveSsoConfig = async ({
           priority:       i + 1,
           status:         'active',
         }));
-      await JitMapping.bulkCreate(rows, { transaction: t });
+      await JitMapping.bulkCreate(rows, { transaction: tx });
     }
 
-    await t.commit();
+    await tx.commit();
     logger.debug(`[POSTGRES] SSO config saved | company_id: ${company_id}`);
   } catch (err) {
-    await t.rollback();
+    await tx.rollback();
     throw err;
   }
 };
@@ -293,18 +339,18 @@ const setSsoStatus = async (companyId, status) => {
 
 const deleteSsoConfig = async (companyId) => {
   const sequelize = require('../../config/db');
-  const t = await sequelize.transaction();
+  const tx = await sequelize.transaction();
   try {
     // Child rows first — manual tables have no DB-level ON DELETE CASCADE
-    await OidcConfiguration.destroy({ where: { company_id: companyId }, transaction: t });
-    await SamlConfiguration.destroy({ where: { company_id: companyId }, transaction: t });
-    await JitMapping.destroy({ where: { company_id: companyId }, transaction: t });
-    const count = await SsoIntegration.destroy({ where: { company_id: companyId }, transaction: t });
-    await t.commit();
+    await OidcConfiguration.destroy({ where: { company_id: companyId }, transaction: tx });
+    await SamlConfiguration.destroy({ where: { company_id: companyId }, transaction: tx });
+    await JitMapping.destroy({ where: { company_id: companyId }, transaction: tx });
+    const count = await SsoIntegration.destroy({ where: { company_id: companyId }, transaction: tx });
+    await tx.commit();
     logger.info(`[POSTGRES] SSO config deleted | company_id: ${companyId} | found: ${count > 0}`);
     return count > 0;
   } catch (err) {
-    await t.rollback();
+    await tx.rollback();
     throw err;
   }
 };
