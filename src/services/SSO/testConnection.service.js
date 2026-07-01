@@ -58,13 +58,13 @@ const testOidcDiscovery = async ({ tenant_id }) => {
   return { success: false, message: 'Tenant not found or unreachable' };
 };
 
-// Extracts the first X509Certificate value from Azure federation metadata XML.
-// Returns raw base64 (whitespace stripped) or null if not found.
-const extractCertFromMetadata = (xmlString) => {
-  if (typeof xmlString !== 'string') return null;
-  const match = xmlString.match(/<X509Certificate[^>]*>([\s\S]+?)<\/X509Certificate>/i);
-  if (!match) return null;
-  return match[1].replace(/\s+/g, '');
+// Extracts ALL X509Certificate values from Azure federation metadata XML.
+// Azure metadata contains multiple signing certs — must check all, not just the first.
+// Returns array of raw base64 strings (whitespace stripped).
+const extractCertsFromMetadata = (xmlString) => {
+  if (typeof xmlString !== 'string') return [];
+  const matches = [...xmlString.matchAll(/<X509Certificate[^>]*>([\s\S]+?)<\/X509Certificate>/gi)];
+  return matches.map(m => m[1].replace(/\s+/g, ''));
 };
 
 const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
@@ -78,8 +78,8 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
   }
 
   if (certificate) {
-    const azureCert = extractCertFromMetadata(res.body);
-    if (!azureCert) {
+    const azureCerts = extractCertsFromMetadata(res.body);
+    if (azureCerts.length === 0) {
       return { success: false, message: 'Could not extract signing certificate from Azure metadata' };
     }
     // Frontend sends certificate as base64(PEM string) — decode first to get PEM, then strip headers
@@ -88,7 +88,7 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
       .replace(/-----BEGIN CERTIFICATE-----/g, '')
       .replace(/-----END CERTIFICATE-----/g, '')
       .replace(/\s+/g, '');
-    if (azureCert !== uploadedCert) {
+    if (!azureCerts.includes(uploadedCert)) {
       return { success: false, message: 'Certificate does not match Azure tenant signing certificate' };
     }
   }
