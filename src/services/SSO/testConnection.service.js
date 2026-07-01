@@ -58,16 +58,40 @@ const testOidcDiscovery = async ({ tenant_id }) => {
   return { success: false, message: 'Tenant not found or unreachable' };
 };
 
-const testSamlDiscovery = async ({ tenant_id, sso_url }) => {
+// Extracts the first X509Certificate value from Azure federation metadata XML.
+// Returns raw base64 (whitespace stripped) or null if not found.
+const extractCertFromMetadata = (xmlString) => {
+  if (typeof xmlString !== 'string') return null;
+  const match = xmlString.match(/<X509Certificate[^>]*>([\s\S]+?)<\/X509Certificate>/i);
+  if (!match) return null;
+  return match[1].replace(/\s+/g, '');
+};
+
+const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
   const metadataUrl = sso_url
     ? sso_url.replace('/saml2', '/federationmetadata/2007-06/federationmetadata.xml')
     : microsoft.samlMetadataUrl(tenant_id);
 
   const res = await fetchJson(metadataUrl, { method: 'GET' });
-  if (res.status === 200) {
-    return { success: true, message: 'Connection successful — SAML IdP metadata reachable' };
+  if (res.status !== 200) {
+    return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
   }
-  return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
+
+  if (certificate) {
+    const azureCert = extractCertFromMetadata(res.body);
+    if (!azureCert) {
+      return { success: false, message: 'Could not extract signing certificate from Azure metadata' };
+    }
+    const uploadedCert = certificate
+      .replace(/-----BEGIN CERTIFICATE-----/g, '')
+      .replace(/-----END CERTIFICATE-----/g, '')
+      .replace(/\s+/g, '');
+    if (azureCert !== uploadedCert) {
+      return { success: false, message: 'Certificate does not match Azure tenant signing certificate' };
+    }
+  }
+
+  return { success: true, message: 'Connection successful — SAML IdP metadata reachable and certificate verified' };
 };
 
 /**
@@ -161,7 +185,7 @@ const testConnection = async (payload) => {
   }
 
   if (protocol === 'saml') {
-    return testSamlDiscovery({ tenant_id, sso_url });
+    return testSamlDiscovery({ tenant_id, sso_url, certificate });
   }
 
   return { success: false, message: 'Unknown protocol' };
