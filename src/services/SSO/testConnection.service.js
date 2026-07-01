@@ -82,7 +82,9 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
     if (!azureCert) {
       return { success: false, message: 'Could not extract signing certificate from Azure metadata' };
     }
-    const uploadedCert = certificate
+    // Frontend sends certificate as base64(PEM string) — decode first to get PEM, then strip headers
+    const pemString = Buffer.from(certificate, 'base64').toString('utf8');
+    const uploadedCert = pemString
       .replace(/-----BEGIN CERTIFICATE-----/g, '')
       .replace(/-----END CERTIFICATE-----/g, '')
       .replace(/\s+/g, '');
