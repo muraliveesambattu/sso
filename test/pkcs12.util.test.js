@@ -21,26 +21,34 @@ const buildP12 = (password) => {
   return forge.util.encode64(der);
 };
 
+// NOTE: extractFromPkcs12 is ASYNC — it returns a Promise and rejects on error.
+// Tests must await and use rejects/resolves; a sync try/catch leaves the rejected
+// promise unhandled and crashes the Node process.
 describe('pkcs12.util — extractFromPkcs12', () => {
-  test('throws MISSING_CERTIFICATE when no bundle provided', () => {
-    try { extractFromPkcs12('', 'pw'); throw new Error('no throw'); }
-    catch (e) { expect(e.code).toBe('MISSING_CERTIFICATE'); expect(e.statusCode).toBe(400); }
+  test('throws MISSING_CERTIFICATE when no bundle provided', async () => {
+    await expect(extractFromPkcs12('', 'pw')).rejects.toMatchObject({
+      code: 'MISSING_CERTIFICATE',
+      statusCode: 400,
+    });
   });
 
-  test('throws INVALID_PKCS12 on garbage input', () => {
-    try { extractFromPkcs12('not-a-real-pkcs12-bundle!!!', 'pw'); throw new Error('no throw'); }
-    catch (e) { expect(e.code).toBe('INVALID_PKCS12'); expect(e.statusCode).toBe(400); }
+  test('throws INVALID_PKCS12 on garbage input', async () => {
+    await expect(extractFromPkcs12('not-a-real-pkcs12-bundle!!!', 'pw')).rejects.toMatchObject({
+      code: 'INVALID_PKCS12',
+      statusCode: 400,
+    });
   });
 
-  test('throws INVALID_PKCS12 on wrong password', () => {
+  test('throws INVALID_PKCS12 on wrong password', async () => {
     const p12 = buildP12('correct-password');
-    try { extractFromPkcs12(p12, 'wrong-password'); throw new Error('no throw'); }
-    catch (e) { expect(e.code).toBe('INVALID_PKCS12'); }
+    await expect(extractFromPkcs12(p12, 'wrong-password')).rejects.toMatchObject({
+      code: 'INVALID_PKCS12',
+    });
   });
 
-  test('extracts private key (base64 PEM) and SHA-1 thumbprint (uppercase hex) from a valid bundle', () => {
+  test('extracts private key (base64 PEM) and SHA-1 thumbprint (uppercase hex) from a valid bundle', async () => {
     const p12 = buildP12('s3cret');
-    const { privateKeyB64, thumbprintHex } = extractFromPkcs12(p12, 's3cret');
+    const { privateKeyB64, thumbprintHex } = await extractFromPkcs12(p12, 's3cret');
 
     const pem = Buffer.from(privateKeyB64, 'base64').toString('utf8');
     expect(pem).toMatch(/-----BEGIN (RSA )?PRIVATE KEY-----/);
@@ -49,10 +57,10 @@ describe('pkcs12.util — extractFromPkcs12', () => {
     expect(thumbprintHex).toMatch(/^[0-9A-F]{40}$/); // SHA-1 = 40 hex chars, uppercase
   });
 
-  test('accepts a data-URL prefixed bundle (FileReader.readAsDataURL output)', () => {
+  test('accepts a data-URL prefixed bundle (FileReader.readAsDataURL output)', async () => {
     const p12 = buildP12('pw');
     const dataUrl = `data:application/x-pkcs12;base64,${p12}`;
-    const { privateKeyB64, thumbprintHex } = extractFromPkcs12(dataUrl, 'pw');
+    const { privateKeyB64, thumbprintHex } = await extractFromPkcs12(dataUrl, 'pw');
     expect(privateKeyB64).toBeTruthy();
     expect(thumbprintHex).toMatch(/^[0-9A-F]{40}$/);
   });

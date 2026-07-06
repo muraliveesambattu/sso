@@ -40,6 +40,9 @@ const mockHttpsResponse = (responseFactory) => jest.spyOn(https, 'request').mock
   const req = new EventEmitter();
   let body = '';
   req.write = jest.fn((chunk) => { body += chunk; });
+  // fetchJson arms a request timeout — the ClientRequest exposes setTimeout/destroy.
+  req.setTimeout = jest.fn();
+  req.destroy = jest.fn();
   req.end = jest.fn(() => {
     const response = responseFactory({ url, options, body, req });
     if (response.error) {
@@ -136,7 +139,7 @@ describe('oidcTestCallback.controller', () => {
       statusCode: 200,
       body: JSON.stringify({ id_token: 'id-token' }),
     }));
-    decodeJwt.mockReturnValue({ nonce: 'nonce-actual', email: 'user@example.com' });
+    decodeJwt.mockReturnValue({ payload: { nonce: 'nonce-actual', email: 'user@example.com' } });
     verifyJwtSignature.mockResolvedValue(undefined);
 
     await oidcTestCallbackController(
@@ -170,7 +173,7 @@ describe('oidcTestCallback.controller', () => {
       };
     });
     generateJwtAssertion.mockReturnValue('signed-assertion');
-    decodeJwt.mockReturnValue({ nonce: 'nonce-3', email: 'user@example.com' });
+    decodeJwt.mockReturnValue({ payload: { nonce: 'nonce-3', email: 'user@example.com' } });
     verifyJwtSignature.mockResolvedValue(undefined);
 
     await oidcTestCallbackController(

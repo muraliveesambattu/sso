@@ -12,7 +12,15 @@ const fetchJson = (url, options) =>
     const headers = { ...(options.headers || {}) };
     if (body) headers['Content-Length'] = Buffer.byteLength(body);
 
-    const req = lib.request(url, { method: options.method || 'GET', headers }, (res) => {
+    const reqOptions = {
+      method: options.method || 'GET',
+      headers,
+      ...(lib === https && options.rejectUnauthorized === false
+        ? { agent: new https.Agent({ rejectUnauthorized: false }) }
+        : {}),
+    };
+
+    const req = lib.request(url, reqOptions, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
@@ -67,14 +75,47 @@ const extractCertsFromMetadata = (xmlString) => {
   return matches.map(m => m[1].replace(/\s+/g, ''));
 };
 
+// Extracts tenant ID from the metadata entityID attribute.
+// Azure sets entityID="https://sts.windows.net/{tenant-id}/"
+const extractTenantFromMetadata = (xmlString) => {
+  if (typeof xmlString !== 'string') return null;
+  const match = xmlString.match(/entityID=["']https:\/\/sts\.windows\.net\/([0-9a-f-]{36})\//i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+// Extracts tenant ID from an Azure SSO URL.
+// Handles: https://login.microsoftonline.com/{tenant-id}/saml2?appid=...
+const extractTenantFromSsoUrl = (url) => {
+  if (typeof url !== 'string') return null;
+  const match = url.match(/login\.microsoftonline\.com\/([0-9a-f-]{36})\//i);
+  return match ? match[1].toLowerCase() : null;
+};
+
 const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
+  // Validate tenant ID in SSO URL before fetching metadata
+  if (sso_url) {
+    const urlTenant = extractTenantFromSsoUrl(sso_url);
+    if (!urlTenant) {
+      return { success: false, message: 'Could not extract tenant ID from SSO URL. Ensure it matches https://login.microsoftonline.com/{tenant-id}/saml2?appid={app-id}' };
+    }
+  }
+
   const metadataUrl = sso_url
     ? sso_url.replace('/saml2', '/federationmetadata/2007-06/federationmetadata.xml')
     : microsoft.samlMetadataUrl(tenant_id);
 
-  const res = await fetchJson(metadataUrl, { method: 'GET' });
+  const res = await fetchJson(metadataUrl, { method: 'GET', rejectUnauthorized: false });
   if (res.status !== 200) {
     return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
+  }
+
+  // Verify the metadata entityID tenant matches the SSO URL tenant
+  if (sso_url) {
+    const urlTenant      = extractTenantFromSsoUrl(sso_url);
+    const metadataTenant = extractTenantFromMetadata(res.body);
+    if (metadataTenant && urlTenant && metadataTenant !== urlTenant) {
+      return { success: false, message: `SSO URL tenant does not match metadata tenant. Expected ${urlTenant}, got ${metadataTenant}` };
+    }
   }
 
   if (certificate) {

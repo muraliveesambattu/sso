@@ -224,24 +224,48 @@ describe('saveSsoConfig.service', () => {
     expect(result.company_id).toBe('existing-company-id');
   });
 
-  test('falls back to JSON persistence when PostgreSQL save fails', async () => {
+  // The silent JSON fallback on PostgreSQL failure was removed intentionally:
+  // it masked DB write failures (returned 201 while nothing persisted). The
+  // error must now propagate so the caller sees the failure.
+  test('propagates the error when PostgreSQL save fails (no silent JSON fallback)', async () => {
     const { saveSsoConfig, writeFile, pgSave } = loadService({
       usePostgres: true,
       pgSaveImpl: async () => { throw new Error('db unavailable'); },
       getByDomainImpl: async () => null,
     });
 
-    const result = await saveSsoConfig({
+    await expect(saveSsoConfig({
       protocol: 'oidc',
       domains: 'fallback.example.com',
       tenant_id: 'common',
       client_id: 'client-fallback',
       auth_method: 'client_secret_post',
       client_secret: 'secret-fallback',
-    });
+    })).rejects.toThrow('db unavailable');
 
     expect(pgSave).toHaveBeenCalled();
-    expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(result.company_id).toBe('zdna-fallback-example-com-1700000000000');
+    expect(writeFile).not.toHaveBeenCalled(); // must NOT silently fall back to JSON
+  });
+
+  test('strips any ?appid= query from the SAML sso_url before persisting', async () => {
+    const { saveSsoConfig, writeFile } = loadService({
+      readFileImpl: async () => {
+        const err = new Error('missing');
+        err.code = 'ENOENT';
+        throw err;
+      },
+    });
+
+    await saveSsoConfig({
+      protocol: 'saml',
+      domains: 'appid.example.com',
+      sso_url: 'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2?appid=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    });
+
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    // stored URL must be clean (no query) so the login redirect's own '?' is valid
+    expect(written.saml_configurations[0].sso_url).toBe(
+      'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2'
+    );
   });
 });

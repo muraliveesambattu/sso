@@ -3,7 +3,7 @@ jest.mock('../src/config/logger', () => ({
 }));
 
 jest.mock('../src/services/db/ssoDataService', () => ({
-  getSamlConfigByAcsUrl: jest.fn(),
+  getSamlConfig: jest.fn(),
 }));
 
 jest.mock('../src/utils/saml/samlSignature.util', () => ({
@@ -34,7 +34,7 @@ jest.mock('../src/utils/saml/samlValidator.util', () => ({
 }));
 
 const { processSamlCallback } = require('../src/services/Saml/samlCallback.service');
-const { getSamlConfigByAcsUrl } = require('../src/services/db/ssoDataService');
+const { getSamlConfig } = require('../src/services/db/ssoDataService');
 const { verifyXmlSignature } = require('../src/utils/saml/samlSignature.util');
 const { samlRequestStore } = require('../src/services/Saml/samlAuthRequest.service');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
@@ -92,7 +92,7 @@ describe('samlCallback.service', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(fixedNow);
-    getSamlConfigByAcsUrl.mockResolvedValue({
+    getSamlConfig.mockResolvedValue({
       company_id: 'company-1',
       certificate: 'cert-value',
       sso_url: 'https://login.microsoftonline.com/tenant-123/saml2',
@@ -127,12 +127,12 @@ describe('samlCallback.service', () => {
     });
   });
 
-  test('rejects when the SAML configuration cannot be found for the ACS URL', async () => {
+  test('rejects when the SAML configuration cannot be found for the company', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 1000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
-    getSamlConfigByAcsUrl.mockResolvedValue(null);
+    getSamlConfig.mockResolvedValue(null);
 
     await expect(processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4')).rejects.toMatchObject({
       statusCode: 500,
@@ -143,7 +143,7 @@ describe('samlCallback.service', () => {
   test('rejects invalid XML structures and responses without assertions', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 1000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
 
     await expect(processSamlCallback(encodeSaml(buildResponseXml({ extraResponseContent: '<parsererror />' })), null, {}, '1.2.3.4')).rejects.toMatchObject({
@@ -161,7 +161,7 @@ describe('samlCallback.service', () => {
   test('rejects expired authn request sessions and deletes them from the store', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 700000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
 
     await expect(processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4')).rejects.toMatchObject({
@@ -174,7 +174,7 @@ describe('samlCallback.service', () => {
   test('rejects responses that are missing required oid claims', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 1000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
 
     await expect(processSamlCallback(encodeSaml(buildResponseXml({ includeOid: false })), null, {}, '1.2.3.4')).rejects.toMatchObject({
@@ -186,7 +186,7 @@ describe('samlCallback.service', () => {
   test('rejects responses that are missing required email claims', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 1000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
 
     await expect(processSamlCallback(encodeSaml(buildResponseXml({ includeEmail: false, nameIdValue: '' })), null, {}, '1.2.3.4')).rejects.toMatchObject({
@@ -198,12 +198,12 @@ describe('samlCallback.service', () => {
   test('processes valid SAML responses, resolves the user, and returns a Firebase custom token', async () => {
     samlRequestStore.get.mockReturnValue({
       timestamp: fixedNow - 2000,
-      ssoContext: { acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
     });
 
     const result = await processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4');
 
-    expect(getSamlConfigByAcsUrl).toHaveBeenCalledWith('https://acs.example.com');
+    expect(getSamlConfig).toHaveBeenCalledWith('company-1');
     expect(validateStatus).toHaveBeenCalled();
     expect(validateIssuer).toHaveBeenCalledWith(expect.any(Object), 'tenant-123');
     expect(validateInResponseTo).toHaveBeenCalledWith(expect.any(Object), 'req-123');

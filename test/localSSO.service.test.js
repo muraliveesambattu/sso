@@ -29,12 +29,13 @@ const loadLocalService = ({ initialData, env = {} } = {}) => {
   process.env.SAML_ACS_URL = env.SAML_ACS_URL || 'https://sp.example.com/callback';
 
   const readFileSync = jest.fn(() => JSON.stringify(dataset));
-  const writeFileSync = jest.fn();
+  // Reads stay sync (fs.readFileSync); writes are async now (fs.promises.writeFile).
+  const writeFile = jest.fn(async () => undefined);
   const randomUUID = jest.fn(() => 'uuid-local');
   const resolveSecret = jest.fn((val) => val === 'enc:secret-1' ? 'plain-secret-1' : val);
   const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
-  jest.doMock('fs', () => ({ readFileSync, writeFileSync }));
+  jest.doMock('fs', () => ({ readFileSync, promises: { writeFile } }));
   jest.doMock('crypto', () => ({ randomUUID }));
   jest.doMock('../src/config/logger', () => ({ logger }));
   jest.doMock('../src/config/constants', () => ({
@@ -48,7 +49,7 @@ const loadLocalService = ({ initialData, env = {} } = {}) => {
   jest.doMock('../src/utils/crypto.util', () => ({ resolveSecret }));
 
   const service = require('../src/services/db/localSSO.service');
-  return { ...service, mocks: { readFileSync, writeFileSync, randomUUID, resolveSecret, logger } };
+  return { ...service, mocks: { readFileSync, writeFile, randomUUID, resolveSecret, logger } };
 };
 
 describe('localSSO.service', () => {
@@ -107,18 +108,18 @@ describe('localSSO.service', () => {
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     }));
-    expect(service.mocks.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(service.mocks.writeFile).toHaveBeenCalledTimes(1);
   });
 
   test('updates users and warns without persisting when the user is missing', async () => {
     const service = loadLocalService();
 
     await service.updateUser('user-1', { display_name: 'Updated User' });
-    expect(service.mocks.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(service.mocks.writeFile).toHaveBeenCalledTimes(1);
 
     await service.updateUser('missing-user', { display_name: 'Nobody' });
     expect(service.mocks.logger.warn).toHaveBeenCalled();
-    expect(service.mocks.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(service.mocks.writeFile).toHaveBeenCalledTimes(1);
   });
 
   test('masks secrets in details, updates status, deletes config, and reloads data', async () => {

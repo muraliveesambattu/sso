@@ -231,7 +231,8 @@ describe('domainCheck.service', () => {
       'http://localhost:5000/auth/callback',
       'https://login.microsoftonline.com/tenant/saml2',
       { user: 'session' },
-      'session-3'
+      'session-3',
+      'company-3'
     );
     expect(result).toEqual({
       found: true,

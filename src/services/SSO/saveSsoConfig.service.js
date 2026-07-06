@@ -101,11 +101,25 @@ const buildOidcRow = ({ company_id, client_id, auth_method, client_secret,
   redirect_uri:          redirect_uri || DEFAULTS.OIDC_REDIRECT_URI,
 });
 
+// Admins may paste the SSO URL with ?appid=<application-id> — used by
+// test-connection to verify the app's signing certificate ownership. The
+// login redirect builder appends its own '?SAMLRequest=...' (hardcoded '?'),
+// so the stored URL must carry no query string or fragment.
+const stripUrlQuery = (url) => {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch {
+    return url; // format already validated upstream
+  }
+};
+
 const buildSamlRow = ({ company_id, entity_id, sso_url, acs_url, certificate }) => ({
   id:         company_id,
   company_id,
   entity_id:  entity_id || DEFAULTS.SAML_ENTITY_ID,
-  sso_url,
+  sso_url:    stripUrlQuery(sso_url),
   acs_url:    acs_url || DEFAULTS.SAML_ACS_URL,
   certificate: certificate || null,
 });

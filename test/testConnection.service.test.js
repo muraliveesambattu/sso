@@ -197,14 +197,83 @@ describe('testConnection.service', () => {
     });
   });
 
+  // Azure tenant/app IDs are 36-char GUIDs; the service validates this before
+  // fetching metadata, so tests must use real GUID shapes.
+  const TENANT_GUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const APP_GUID    = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  // Builds a metadata XML doc carrying the tenant entityID and (optionally) a
+  // signing cert, mirroring Azure federation metadata.
+  const buildMetadataXml = (rawCert) =>
+    `<EntityDescriptor entityID="https://sts.windows.net/${TENANT_GUID}/">` +
+    (rawCert ? `<KeyDescriptor use="signing"><X509Certificate>${rawCert}</X509Certificate></KeyDescriptor>` : '') +
+    `</EntityDescriptor>`;
+
+  // Frontend uploads the cert as base64(PEM); reproduce that encoding here.
+  const encodeUploadedCert = (rawCert) =>
+    Buffer.from(`-----BEGIN CERTIFICATE-----\n${rawCert}\n-----END CERTIFICATE-----`, 'utf8').toString('base64');
+
   test('checks SAML metadata using the derived federation metadata URL', async () => {
     mockRequest(https, ({ url }) => {
-      expect(url).toBe('https://login.microsoftonline.com/tenant-3/federationmetadata/2007-06/federationmetadata.xml');
-      return {
-        statusCode: 200,
-        body: '<EntityDescriptor />',
-      };
+      expect(url).toBe(`https://login.microsoftonline.com/${TENANT_GUID}/federationmetadata/2007-06/federationmetadata.xml`);
+      return { statusCode: 200, body: buildMetadataXml() };
     });
+
+    const result = await testConnection({
+      protocol: 'saml',
+      tenant_id: TENANT_GUID,
+      sso_url: `https://login.microsoftonline.com/${TENANT_GUID}/saml2`,
+    });
+
+    expect(result).toEqual({
+      success: true,
+      message: 'Connection successful — SAML IdP metadata reachable and certificate verified',
+    });
+  });
+
+  test('forwards ?appid= to the metadata fetch so per-app signing certs are verified', async () => {
+    const rawCert = 'MIIBExampleAppScopedCert0000000000000000';
+    let fetchedUrl;
+    mockRequest(https, ({ url }) => {
+      fetchedUrl = url;
+      return { statusCode: 200, body: buildMetadataXml(rawCert) };
+    });
+
+    const result = await testConnection({
+      protocol: 'saml',
+      tenant_id: TENANT_GUID,
+      sso_url: `https://login.microsoftonline.com/${TENANT_GUID}/saml2?appid=${APP_GUID}`,
+      certificate: encodeUploadedCert(rawCert),
+    });
+
+    // the appid query must ride along to the app-scoped federation metadata doc
+    expect(fetchedUrl).toBe(
+      `https://login.microsoftonline.com/${TENANT_GUID}/federationmetadata/2007-06/federationmetadata.xml?appid=${APP_GUID}`
+    );
+    expect(result.success).toBe(true);
+  });
+
+  test('fails when the uploaded certificate does not match the Azure metadata', async () => {
+    mockRequest(https, () => ({
+      statusCode: 200,
+      body: buildMetadataXml('MIIBAzureSigningCert00000000000000000000'),
+    }));
+
+    const result = await testConnection({
+      protocol: 'saml',
+      tenant_id: TENANT_GUID,
+      sso_url: `https://login.microsoftonline.com/${TENANT_GUID}/saml2`,
+      certificate: encodeUploadedCert('MIIBSomeOtherCert00000000000000000000000'),
+    });
+
+    expect(result).toEqual({
+      success: false,
+      message: 'Certificate does not match Azure tenant signing certificate',
+    });
+  });
+
+  test('rejects a SAML SSO URL whose tenant id is not a GUID before any fetch', async () => {
+    const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: buildMetadataXml() }));
 
     const result = await testConnection({
       protocol: 'saml',
@@ -212,10 +281,9 @@ describe('testConnection.service', () => {
       sso_url: 'https://login.microsoftonline.com/tenant-3/saml2',
     });
 
-    expect(result).toEqual({
-      success: true,
-      message: 'Connection successful — SAML IdP metadata reachable',
-    });
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/Could not extract tenant ID from SSO URL/);
+    expect(httpsSpy).not.toHaveBeenCalled(); // must short-circuit, no metadata fetch
   });
 
   test('returns false for unknown protocols', async () => {
