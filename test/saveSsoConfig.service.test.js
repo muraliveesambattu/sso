@@ -49,8 +49,14 @@ const loadService = ({
     }));
   }
 
+  // JIT role validation looks role_ids up via the data service — treat every
+  // requested id as a known role by default so save tests stay focused.
+  const getRolesByIds = jest.fn(async (ids) =>
+    ids.map((id) => ({ role_id: id, role_name: id, permissions: [] })));
+  jest.doMock('../src/services/db/ssoDataService', () => ({ getRolesByIds }));
+
   const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
-  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain };
+  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain, getRolesByIds };
 };
 
 describe('saveSsoConfig.service', () => {
@@ -86,6 +92,27 @@ describe('saveSsoConfig.service', () => {
     await expect(saveSsoConfig({ protocol: 'oidc', domains: 'not a domain', tenant_id: 'common' })).rejects.toMatchObject({ code: 'INVALID_DOMAINS' });
     await expect(saveSsoConfig({ protocol: 'oidc', domains: 'example.com', tenant_id: 'bad-tenant' })).rejects.toMatchObject({ code: 'INVALID_TENANT_ID' });
     await expect(saveSsoConfig({ protocol: 'saml', domains: 'example.com', sso_url: 'ftp://bad-url' })).rejects.toMatchObject({ code: 'INVALID_SSO_URL' });
+  });
+
+  test('rejects jit_mappings that reference unknown role_ids', async () => {
+    const { saveSsoConfig, getRolesByIds } = loadService();
+    // Only role-analyst exists — role-ghost must be rejected before persisting
+    getRolesByIds.mockImplementation(async (ids) =>
+      ids.filter((id) => id === 'role-analyst').map((id) => ({ role_id: id, role_name: 'Analyst', permissions: [] })));
+
+    await expect(saveSsoConfig({
+      protocol: 'oidc',
+      domains: 'example.com',
+      tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [
+        { mapping_source: 'default', zdna_role: 'role-analyst' },
+        { mapping_source: 'group', mapping_value: 'grp-1', zdna_role: 'role-ghost' },
+      ],
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_ROLE_ID',
+    });
   });
 
   test('saves OIDC configs to JSON with encrypted client secrets and normalized domains', async () => {

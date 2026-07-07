@@ -164,6 +164,14 @@ const getRolesByIds = async (roleIds) => {
   return data.zdna_roles.filter((r) => roleIds.includes(r.role_id));
 };
 
+/**
+ * @returns {Promise<Array>} every role definition
+ */
+const getAllRoles = async () => {
+  logger.debug('[LOCAL] Query zdna_roles | all');
+  return data.zdna_roles;
+};
+
 // ── sso_users ─────────────────────────────────────────────────────────────────
 
 /**
@@ -226,6 +234,37 @@ const updateUser = async (userId, updates) => {
     updatedAt: new Date().toISOString(),
   };
   await persist();
+};
+
+/**
+ * @param {string} userId
+ * @returns {Promise<Object|null>}
+ */
+const findUserById = async (userId) => {
+  logger.debug(`[LOCAL] Query sso_users | id: ${userId}`);
+  return data.sso_users.find((u) => u.id === userId || u.user_id === userId) || null;
+};
+
+/**
+ * @param {string} companyId
+ * @returns {Promise<Array>}
+ */
+const listUsersByCompany = async (companyId) => {
+  logger.debug(`[LOCAL] Query sso_users | company_id: ${companyId} | all`);
+  return data.sso_users.filter((u) => u.company_id === companyId);
+};
+
+/**
+ * @param {string} userId
+ * @returns {Promise<boolean>} true when a user was removed
+ */
+const deleteUser = async (userId) => {
+  logger.debug(`[LOCAL] Deleting sso_users entry | id: ${userId}`);
+  const idx = data.sso_users.findIndex((u) => u.id === userId || u.user_id === userId);
+  if (idx === -1) return false;
+  data.sso_users.splice(idx, 1);
+  await persist();
+  return true;
 };
 
 // ── Admin: retrieve full SSO config (secrets masked) ─────────────────────────
@@ -326,11 +365,15 @@ module.exports = {
   // JIT
   getJitMappings,
   getRolesByIds,
+  getAllRoles,
   // Users
   findUserByOid,
   findUserByEmail,
+  findUserById,
+  listUsersByCompany,
   createUser,
   updateUser,
+  deleteUser,
   // Admin
   getSsoConfigDetails,
   setSsoStatus,

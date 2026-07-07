@@ -68,6 +68,11 @@ describe('firebaseAdmin.util', () => {
     const token = await generateCustomToken('user-2', {
       email: 'user2@example.com',
       role: 'Analyst',
+      roles: [
+        { role_id: 'role-analyst', role_name: 'Analyst', permissions: ['read', 'write'] },
+        // JSON-store rows may carry permissions as a string — must be parsed
+        { role_id: 'role-viewer', role_name: 'Viewer', permissions: '["read"]' },
+      ],
       companyId: 'company-2',
       displayName: 'User Two',
     });
@@ -91,6 +96,11 @@ describe('firebaseAdmin.util', () => {
       loginType: 'entra',
       companyId: 'company-2',
       displayName: 'User Two',
+      zdnaRoles: [
+        { id: 'role-analyst', name: 'Analyst' },
+        { id: 'role-viewer', name: 'Viewer' },
+      ],
+      zdnaPermissions: ['read', 'write'],
     });
     expect(token).toBe('firebase-token');
   });

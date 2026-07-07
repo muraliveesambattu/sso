@@ -14,6 +14,14 @@ describe('sso.routes', () => {
 
     const expressMock = { Router: jest.fn(() => routerMock) };
     const requireAdminKey = jest.fn();
+    const requireUser = jest.fn();
+    // requireAdminKeyOrPermission is a factory — return a distinct sentinel per
+    // permission so the assertions verify BOTH the wiring and the permission.
+    const permissionSentinels = {};
+    const requireAdminKeyOrPermission = jest.fn((permission) => {
+      permissionSentinels[permission] = permissionSentinels[permission] || jest.fn();
+      return permissionSentinels[permission];
+    });
     const domainCheckLimiter = jest.fn();
     const samlCallbackLimiter = jest.fn();
 
@@ -27,6 +35,12 @@ describe('sso.routes', () => {
     const handleGetSsoConfig = jest.fn();
     const handleSetSsoStatus = jest.fn();
     const handleDeleteSsoConfig = jest.fn();
+    const handleListRoles = jest.fn();
+    const handleGetMe = jest.fn();
+    const handleListUsers = jest.fn();
+    const handleCreateUser = jest.fn();
+    const handleUpdateUser = jest.fn();
+    const handleDeleteUser = jest.fn();
     const getFlags = jest.fn();
     const updateFlag = jest.fn();
 
@@ -43,21 +57,44 @@ describe('sso.routes', () => {
       handleSetSsoStatus,
       handleDeleteSsoConfig,
     }));
+    jest.doMock('../src/controllers/ssoUsers.controller', () => ({
+      handleListRoles,
+      handleGetMe,
+      handleListUsers,
+      handleCreateUser,
+      handleUpdateUser,
+      handleDeleteUser,
+    }));
     jest.doMock('../src/controllers/featureFlag.controller', () => ({ getFlags, updateFlag }));
     jest.doMock('../src/middlewares/rateLimiter', () => ({ domainCheckLimiter, samlCallbackLimiter }));
     jest.doMock('../src/middlewares/adminAuth.middleware', () => ({ requireAdminKey }));
+    jest.doMock('../src/middlewares/userAuth.middleware', () => ({ requireAdminKeyOrPermission, requireUser }));
 
     require('../src/routers/sso.routes');
 
     expect(expressMock.Router).toHaveBeenCalled();
+
+    // Feature flags stay platform-admin-key only
     expect(routerMock.get).toHaveBeenCalledWith('/admin/flags/:company_id', requireAdminKey, getFlags);
     expect(routerMock.post).toHaveBeenCalledWith('/admin/flags', requireAdminKey, updateFlag);
-    expect(routerMock.post).toHaveBeenCalledWith('/test-connection', requireAdminKey, handleTestConnection);
+
+    // RBAC endpoints
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/roles', permissionSentinels.read, handleListRoles);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/me', requireUser, handleGetMe);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/users', permissionSentinels.manage_users, handleListUsers);
+    expect(routerMock.post).toHaveBeenCalledWith('/sso/users', permissionSentinels.manage_users, handleCreateUser);
+    expect(routerMock.patch).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels.manage_users, handleUpdateUser);
+    expect(routerMock.delete).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels.manage_users, handleDeleteUser);
+
+    // Config endpoints: admin key OR the named zdna_roles permission
+    expect(routerMock.post).toHaveBeenCalledWith('/test-connection', permissionSentinels.write, handleTestConnection);
     expect(routerMock.post).toHaveBeenCalledWith('/test-connection/oidc/callback', oidcTestCallbackController);
-    expect(routerMock.post).toHaveBeenCalledWith('/sso/save', requireAdminKey, handleSaveSsoConfig);
-    expect(routerMock.get).toHaveBeenCalledWith('/sso/config', requireAdminKey, handleGetSsoConfig);
-    expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', requireAdminKey, handleSetSsoStatus);
-    expect(routerMock.delete).toHaveBeenCalledWith('/sso/config/:company_id', requireAdminKey, handleDeleteSsoConfig);
+    expect(routerMock.post).toHaveBeenCalledWith('/sso/save', permissionSentinels.write, handleSaveSsoConfig);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/config', permissionSentinels.read, handleGetSsoConfig);
+    expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', permissionSentinels.write, handleSetSsoStatus);
+    expect(routerMock.delete).toHaveBeenCalledWith('/sso/config/:company_id', permissionSentinels.delete, handleDeleteSsoConfig);
+
+    // Login-flow endpoints unchanged
     expect(routerMock.post).toHaveBeenCalledWith('/domain-check', domainCheckLimiter, domainCheck);
     expect(routerMock.post).toHaveBeenCalledWith('/callback', samlCallbackLimiter, samlCallbackController);
     expect(routerMock.get).toHaveBeenCalledWith('/oidc/callback', handleOidcRedirect);

@@ -108,6 +108,12 @@ const getRolesByIds = async (roleIds) => {
   return rows.map(r => r.toJSON());
 };
 
+const getAllRoles = async () => {
+  logger.debug('[POSTGRES] Query zdna_roles | all');
+  const rows = await ZdnaRole.findAll({ order: [['role_id', 'ASC']] });
+  return rows.map(r => r.toJSON());
+};
+
 // ── sso_users ─────────────────────────────────────────────────────────────────
 
 // Normalize user row — adds `id` alias for user_id so callers work
@@ -142,6 +148,27 @@ const createUser = async (userData) => {
 const updateUser = async (userId, updates) => {
   logger.debug(`[POSTGRES] Updating sso_users entry | user_id: ${userId}`);
   await SsoUser.update(updates, { where: { user_id: userId } });
+};
+
+const findUserById = async (userId) => {
+  logger.debug(`[POSTGRES] Query sso_users | user_id: ${userId}`);
+  const row = await SsoUser.findByPk(userId);
+  return normalizeUser(row);
+};
+
+const listUsersByCompany = async (companyId) => {
+  logger.debug(`[POSTGRES] Query sso_users | company_id: ${companyId} | all`);
+  const rows = await SsoUser.findAll({
+    where: { company_id: companyId },
+    order: [['created_at', 'ASC']],
+  });
+  return rows.map(normalizeUser);
+};
+
+const deleteUser = async (userId) => {
+  logger.debug(`[POSTGRES] Deleting sso_users entry | user_id: ${userId}`);
+  const deleted = await SsoUser.destroy({ where: { user_id: userId } });
+  return deleted > 0;
 };
 
 // ── Save SSO Config (write path) ──────────────────────────────────────────────
@@ -369,10 +396,14 @@ module.exports = {
   getSamlConfigByAcsUrl,
   getJitMappings,
   getRolesByIds,
+  getAllRoles,
   findUserByOid,
   findUserByEmail,
+  findUserById,
+  listUsersByCompany,
   createUser,
   updateUser,
+  deleteUser,
   saveSsoConfig,
   getSsoConfigDetails,
   setSsoStatus,

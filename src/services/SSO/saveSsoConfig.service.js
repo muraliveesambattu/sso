@@ -53,6 +53,24 @@ const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   }
 };
 
+// Every jit_mappings role must exist in zdna_roles — an unknown role_id would
+// save fine, then resolveRoles → getRolesByIds returns [] and JIT silently
+// creates users with ZERO roles. Reject at save time instead.
+const validateJitRoleIds = async (jit_enabled, jit_mappings) => {
+  if (!jit_enabled || !Array.isArray(jit_mappings) || jit_mappings.length === 0) return;
+  const requested = [...new Set(jit_mappings.filter(m => m.zdna_role).map(m => m.zdna_role))];
+  if (requested.length === 0) return;
+
+  // Lazy require — keeps module load free of the data layer (and its ORM).
+  const { getRolesByIds } = require('../db/ssoDataService');
+  const found   = await getRolesByIds(requested);
+  const known   = new Set(found.map(r => r.role_id));
+  const unknown = requested.filter(id => !known.has(id));
+  if (unknown.length) {
+    throw fieldError(`Unknown role_id(s) in jit_mappings: ${unknown.join(', ')}`, 'INVALID_ROLE_ID');
+  }
+};
+
 // SAML has no tenant_id field — derive the Azure tenant GUID from the IdP
 // SSO URL (e.g. https://login.microsoftonline.com/<tenant-guid>/saml2).
 const deriveEntraTenantId = (tenant_id, sso_url) => {
@@ -237,6 +255,7 @@ const saveSsoConfig = async (payload) => {
   } = payload;
 
   validateRequiredFields(payload);
+  await validateJitRoleIds(jit_enabled, jit_mappings);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =

@@ -219,6 +219,7 @@ describe('samlCallback.service', () => {
     expect(generateCustomToken).toHaveBeenCalledWith('user-1', {
       email: 'user@example.com',
       role: 'Administrator',
+      roles: [{ role_name: 'Administrator' }],
       companyId: 'company-1',
       displayName: 'Test User',
     });

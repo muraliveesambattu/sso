@@ -130,6 +130,7 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     const customToken  = await generateCustomToken(zdnaTenantId, {
       email:       userClaims.email,
       role:        resolution.roles[0]?.role_name || 'user',
+      roles:       resolution.roles,
       companyId,
       displayName: userClaims.name || userClaims.preferred_username || '',
     });

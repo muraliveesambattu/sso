@@ -1,0 +1,209 @@
+jest.mock('../src/config/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
+jest.mock('../src/services/db/ssoDataService', () => ({
+  getAllRoles: jest.fn(),
+  getRolesByIds: jest.fn(),
+  getSsoIntegrationByCompanyId: jest.fn(),
+  findUserById: jest.fn(),
+  findUserByEmail: jest.fn(),
+  listUsersByCompany: jest.fn(),
+  createUser: jest.fn(),
+  updateUser: jest.fn(),
+  deleteUser: jest.fn(),
+}));
+
+const crypto = require('crypto');
+const {
+  handleListRoles, handleGetMe, handleListUsers,
+  handleCreateUser, handleUpdateUser, handleDeleteUser,
+} = require('../src/controllers/ssoUsers.controller');
+const {
+  getAllRoles, getRolesByIds, getSsoIntegrationByCompanyId,
+  findUserById, findUserByEmail, createUser, updateUser, deleteUser, listUsersByCompany,
+} = require('../src/services/db/ssoDataService');
+
+const mockRes = () => {
+  const res = {};
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
+  return res;
+};
+
+const mockReq = (overrides = {}) => ({
+  headers: {}, params: {}, query: {}, body: {}, path: '/v1/auth/sso/users', ip: '127.0.0.1',
+  ...overrides,
+});
+
+const ROLE_ROWS = [
+  { role_id: 'role-admin',   role_name: 'Administrator', permissions: ['read', 'write', 'delete', 'manage_users'] },
+  { role_id: 'role-analyst', role_name: 'Analyst',       permissions: ['read', 'write'] },
+];
+
+describe('ssoUsers.controller', () => {
+  let randomUuidSpy;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    randomUuidSpy = jest.spyOn(crypto, 'randomUUID').mockReturnValue('uuid-123');
+  });
+
+  afterEach(() => {
+    randomUuidSpy.mockRestore();
+  });
+
+  test('handleListRoles returns the role catalogue', async () => {
+    getAllRoles.mockResolvedValue(ROLE_ROWS);
+    const res = mockRes();
+
+    await handleListRoles(mockReq(), res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: ROLE_ROWS });
+  });
+
+  test('handleGetMe returns fresh roles + permission union from the DB', async () => {
+    findUserById.mockResolvedValue({
+      user_id: 'user-1', company_id: 'company-1', email: 'a@b.com',
+      display_name: 'A', roles: ['role-admin', 'role-analyst'], last_login: null,
+    });
+    getRolesByIds.mockResolvedValue(ROLE_ROWS);
+    const req = mockReq({ user: { uid: 'user-1' } });
+    const res = mockRes();
+
+    await handleGetMe(req, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.roles).toEqual(ROLE_ROWS);
+    expect(payload.data.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
+  });
+
+  test('handleGetMe 404s when the caller has no sso_users record', async () => {
+    findUserById.mockResolvedValue(null);
+    const res = mockRes();
+
+    await handleGetMe(mockReq({ user: { uid: 'ghost' } }), res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  test('handleListUsers falls back to the caller company and 400s without one', async () => {
+    listUsersByCompany.mockResolvedValue([{ user_id: 'u1' }]);
+    const res = mockRes();
+    await handleListUsers(mockReq({ user: { uid: 'user-1', companyId: 'company-1' } }), res, jest.fn());
+    expect(listUsersByCompany).toHaveBeenCalledWith('company-1');
+    expect(res.status).toHaveBeenCalledWith(200);
+
+    const res2 = mockRes();
+    await handleListUsers(mockReq(), res2, jest.fn()); // admin-key caller, no query
+    expect(res2.status).toHaveBeenCalledWith(400);
+  });
+
+  describe('handleCreateUser', () => {
+    const validBody = {
+      company_id: 'company-1', email: 'new@b.com',
+      roles: ['role-analyst'], display_name: 'New User',
+    };
+
+    test('creates a pre-provisioned user with a pending oid placeholder', async () => {
+      getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
+      getRolesByIds.mockResolvedValue([ROLE_ROWS[1]]);
+      findUserByEmail.mockResolvedValue(null);
+      createUser.mockImplementation(async (u) => u);
+      const res = mockRes();
+
+      await handleCreateUser(mockReq({ body: validBody }), res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(createUser).toHaveBeenCalledWith(expect.objectContaining({
+        company_id: 'company-1',
+        email: 'new@b.com',
+        roles: ['role-analyst'],
+        oid: 'pending:uuid-123',
+        login_method: 'sso',
+        jit_provisioned: false,
+      }));
+    });
+
+    test('404 INTEGRATION_NOT_FOUND when the company has no SSO integration', async () => {
+      getSsoIntegrationByCompanyId.mockResolvedValue(null);
+      const next = jest.fn();
+
+      await handleCreateUser(mockReq({ body: validBody }), mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 404, code: 'INTEGRATION_NOT_FOUND' }));
+    });
+
+    test('400 INVALID_ROLE_ID for unknown roles', async () => {
+      getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
+      getRolesByIds.mockResolvedValue([]); // nothing matches
+      const next = jest.fn();
+
+      await handleCreateUser(mockReq({ body: { ...validBody, roles: ['role-ghost'] } }), mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, code: 'INVALID_ROLE_ID' }));
+    });
+
+    test('409 USER_ALREADY_EXISTS for a duplicate email in the same company', async () => {
+      getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
+      getRolesByIds.mockResolvedValue([ROLE_ROWS[1]]);
+      findUserByEmail.mockResolvedValue({ user_id: 'existing' });
+      const next = jest.fn();
+
+      await handleCreateUser(mockReq({ body: validBody }), mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'USER_ALREADY_EXISTS' }));
+    });
+
+    test('400 INVALID_EMAIL for a malformed email', async () => {
+      const next = jest.fn();
+
+      await handleCreateUser(mockReq({ body: { ...validBody, email: 'not-an-email' } }), mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, code: 'INVALID_EMAIL' }));
+    });
+  });
+
+  describe('handleUpdateUser / handleDeleteUser', () => {
+    test('update validates roles and persists them', async () => {
+      findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-analyst'] });
+      getRolesByIds.mockResolvedValue([ROLE_ROWS[0]]);
+      const res = mockRes();
+
+      await handleUpdateUser(mockReq({ params: { user_id: 'user-1' }, body: { roles: ['role-admin'] } }), res, jest.fn());
+
+      expect(updateUser).toHaveBeenCalledWith('user-1', { roles: ['role-admin'] });
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    test('Bearer callers cannot update users of another company', async () => {
+      findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-OTHER', roles: [] });
+      const next = jest.fn();
+
+      await handleUpdateUser(mockReq({
+        params: { user_id: 'user-1' },
+        body: { display_name: 'X' },
+        user: { uid: 'caller', companyId: 'company-1' },
+      }), mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403, code: 'COMPANY_SCOPE_VIOLATION' }));
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    test('delete removes the user and 404s when missing', async () => {
+      findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1' });
+      deleteUser.mockResolvedValue(true);
+      const res = mockRes();
+      await handleDeleteUser(mockReq({ params: { user_id: 'user-1' } }), res, jest.fn());
+      expect(deleteUser).toHaveBeenCalledWith('user-1');
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      findUserById.mockResolvedValue(null);
+      const res2 = mockRes();
+      await handleDeleteUser(mockReq({ params: { user_id: 'ghost' } }), res2, jest.fn());
+      expect(res2.status).toHaveBeenCalledWith(404);
+    });
+  });
+});

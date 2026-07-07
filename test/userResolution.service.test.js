@@ -191,6 +191,7 @@ describe('userResolution.service', () => {
     findUserByOid.mockResolvedValue({
       user_id: 'user-4',
       email: 'user@example.com',
+      oid: 'oid-4',
       login_method: 'sso',
       roles: ['role-analyst'],
     });
@@ -208,11 +209,37 @@ describe('userResolution.service', () => {
       user: {
         user_id: 'user-4',
         email: 'user@example.com',
+        oid: 'oid-4',
         login_method: 'sso',
         roles: ['role-analyst'],
       },
       roles: [{ role_id: 'role-analyst', role_name: 'Analyst' }],
       action: 'login',
+    });
+  });
+
+  test('backfills a pending oid placeholder on first non-JIT login', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: false });
+    // Pre-provisioned via POST /sso/users — real Entra oid unknown at creation
+    findUserByOid.mockResolvedValue(null);
+    findUserByEmail.mockResolvedValue({
+      user_id: 'user-5',
+      email: 'user5@example.com',
+      oid: 'pending:placeholder-uuid',
+      login_method: 'sso',
+      roles: ['role-viewer'],
+    });
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-viewer', role_name: 'Viewer' }]);
+
+    await resolveUser('company-1', {
+      email: 'user5@example.com',
+      oid: 'real-oid-5',
+      groups: [],
+    }, 'oidc');
+
+    expect(updateUser).toHaveBeenCalledWith('user-5', {
+      last_login: expect.any(String),
+      oid: 'real-oid-5',
     });
   });
 

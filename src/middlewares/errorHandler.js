@@ -38,6 +38,16 @@ const SAFE_MESSAGES = {
   INVALID_DOMAIN:           'Invalid domain format.',
   SAML_LOGIN_FAILED:        'SAML authentication failed. Please try again.',
   MISSING_SESSION:          'Session unavailable. Please try again.',
+  DOMAIN_ALREADY_EXISTS:    'This domain is already configured by another organisation.',
+  INVALID_ROLE_ID:          'One or more selected roles do not exist. Please refresh and try again.',
+  MISSING_ROLES:            'At least one role is required.',
+  MISSING_ID_TOKEN:         'Authentication required. Please sign in and try again.',
+  INVALID_ID_TOKEN:         'Your session is invalid or expired. Please sign in again.',
+  INSUFFICIENT_PERMISSIONS: 'You do not have permission to perform this action.',
+  COMPANY_SCOPE_VIOLATION:  'You may only manage your own organisation.',
+  USER_ALREADY_EXISTS:      'A user with this email already exists.',
+  USER_NOT_FOUND:           'User not found.',
+  AUTH_NOT_CONFIGURED:      'Authentication service unavailable. Please contact your administrator.',
 };
 
 const getSafeMessage = (code, originalMessage) => {

@@ -195,8 +195,15 @@ const resolveUser = async (companyId, claims, protocol) => {
   const roles = await getRolesByIds(user.roles || []);
   logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
 
-  // Update last_login — roles unchanged for non-JIT users
-  await updateUser(user.user_id || user.id, { last_login: new Date().toISOString() });
+  // Update last_login — roles unchanged for non-JIT users. Pre-provisioned
+  // users are created with a `pending:` oid placeholder (the real Entra oid
+  // is unknown until first login) — backfill it here so future logins match
+  // by oid instead of falling through to the email lookup.
+  const nonJitUpdates = { last_login: new Date().toISOString() };
+  if (!user.oid || user.oid.startsWith('pending:')) {
+    nonJitUpdates.oid = identity.oid;
+  }
+  await updateUser(user.user_id || user.id, nonJitUpdates);
 
   return { user, roles, action: 'login' };
 };

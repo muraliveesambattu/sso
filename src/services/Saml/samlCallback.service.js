@@ -261,6 +261,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const customToken = await generateCustomToken(zdnaTenantId, {
     email:       email,
     role:        resolution.roles[0]?.role_name || 'user',
+    roles:       resolution.roles,
     companyId:   samlConfig.company_id,
     displayName: allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
                  || allAttributes.name

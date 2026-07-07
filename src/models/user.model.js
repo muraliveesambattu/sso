@@ -35,6 +35,13 @@ const SsoUser = sequelize.define('SsoUser', {
     allowNull:    false,
     defaultValue: false,
   },
+  // How this user authenticates — the non-JIT login path denies SSO to users
+  // created via another method (auth-method bypass guard).
+  login_method: {
+    type:         DataTypes.STRING(20),
+    allowNull:    false,
+    defaultValue: 'sso',
+  },
   last_login: {
     type:      DataTypes.DATE,
     allowNull: true,

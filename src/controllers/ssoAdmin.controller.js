@@ -18,7 +18,16 @@ const { logger }     = require('../config/logger');
 // GET /sso/config?company_id=xxx  or  /sso/config?domain=zebra.com
 const handleGetSsoConfig = async (req, res, next) => {
   try {
-    const { company_id, domain, owner_tenant_id } = req.query;
+    let { company_id, domain, owner_tenant_id } = req.query;
+
+    // Bearer-token callers (req.user set by userAuth.middleware) always get
+    // their OWN company's config — ?domain= / ?owner_tenant_id= would
+    // otherwise bypass the company_id scope check.
+    if (req.user?.companyId) {
+      company_id      = req.user.companyId;
+      domain          = undefined;
+      owner_tenant_id = undefined;
+    }
 
     if (!company_id && !domain && !owner_tenant_id) {
       return res.status(400).json({

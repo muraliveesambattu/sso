@@ -53,8 +53,27 @@ if (!admin.apps.length) {
  * @param {string} claims.role
  * @param {string} claims.companyId
  * @param {string} claims.displayName
+ * @param {Array<{role_id: string, role_name: string, permissions?: Array|string}>} [claims.roles]
+ *                 Full resolved role rows — minted as zdnaRoles/zdnaPermissions
+ *                 so consumers (frontend, Firestore rules) see ALL roles, not
+ *                 just the flattened `role` (= roles[0]) kept for compatibility.
  * @returns {Promise<string>}     Firebase custom token (JWT)
  */
+
+// zdna_roles.permissions is JSON in Postgres but may arrive as a string from
+// the JSON store or raw driver — normalise to an array.
+const toPermissionArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
 const generateCustomToken = async (zdnaTenantId, claims) => {
   try {
     logger.debug(`[FIREBASE] Generating custom token | uid (zdnaTenantId): ${zdnaTenantId} | email: ${claims.email} | role: ${claims.role}`);
@@ -68,6 +87,9 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
     }
 
     // ── PRODUCTION ────────────────────────────────────────────────────────────
+    const roles = Array.isArray(claims.roles) ? claims.roles : [];
+    const zdnaPermissions = [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+
     const additionalClaims = {
       email:       claims.email,
       role:        claims.role        || 'user',
@@ -76,6 +98,11 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
       loginType:   'entra',           // distinguishes from PingFederate (v2)
       companyId:   claims.companyId,
       displayName: claims.displayName || '',
+      // Full RBAC picture — `role` above only carries roles[0] and gets
+      // remapped by the console's AuthProvider; these two claims preserve
+      // every resolved role + the union of their zdna_roles permissions.
+      zdnaRoles:       roles.map(r => ({ id: r.role_id, name: r.role_name })),
+      zdnaPermissions,
     };
 
     const customToken = await admin.auth().createCustomToken(zdnaTenantId, additionalClaims);
@@ -91,4 +118,22 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
   }
 };
 
-module.exports = { generateCustomToken };
+/**
+ * Verifies a Firebase ID token (sent by the console as `Authorization: Bearer`).
+ * Central wrapper so middleware never touches the Admin SDK directly.
+ *
+ * @param {string} idToken
+ * @returns {Promise<object>} decoded token claims (uid, email, companyId, role, …)
+ * @throws statusCode 503 AUTH_NOT_CONFIGURED when the Admin SDK has no credentials
+ */
+const verifyIdToken = async (idToken) => {
+  if (!FIREBASE_CONFIGURED && !RUNNING_IN_FIREBASE) {
+    const err = new Error('Firebase Admin SDK not configured — cannot verify ID tokens');
+    err.statusCode = 503;
+    err.code = 'AUTH_NOT_CONFIGURED';
+    throw err;
+  }
+  return admin.auth().verifyIdToken(idToken);
+};
+
+module.exports = { generateCustomToken, verifyIdToken };
