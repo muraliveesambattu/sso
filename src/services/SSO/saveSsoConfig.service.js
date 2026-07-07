@@ -261,7 +261,14 @@ const saveSsoConfig = async (payload) => {
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =
     await extractCert(protocol, auth_method, certificate, certificate_password);
 
-  const proposedCompanyId = `zdna-${domains.replace(/[.\s]/g, '-')}-${Date.now()}`;
+  // company_id = the configuring admin's tenant id (owner_tenant_id) — the
+  // same key deactivate/delete/status use, so one stable id per organisation.
+  // Fallback to the legacy zdna-<domain>-<ts> form when no owner is supplied
+  // (older callers / direct API use) so the Postgres PK can never be null.
+  // NOTE: for domains that already exist, the store keeps the row's ORIGINAL
+  // company_id regardless of this proposal (edit never re-keys a config).
+  const proposedCompanyId =
+    owner_tenant_id || `zdna-${domains.replace(/[.\s]/g, '-')}-${Date.now()}`;
 
   const fields = {
     protocol, idp, domains,

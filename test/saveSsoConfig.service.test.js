@@ -115,6 +115,59 @@ describe('saveSsoConfig.service', () => {
     });
   });
 
+  test('uses owner_tenant_id as the company_id when provided (matches deactivate/delete keying)', async () => {
+    const { saveSsoConfig, writeFile } = loadService();
+
+    const result = await saveSsoConfig({
+      protocol: 'oidc',
+      domains: 'owner-keyed.com',
+      tenant_id: 'common',
+      client_id: 'client-1',
+      auth_method: 'client_secret',
+      owner_tenant_id: 'noaq1xgCe5otm425Yhk3',
+      owner_company_name: 'Zebra technologies',
+    });
+
+    expect(result.company_id).toBe('noaq1xgCe5otm425Yhk3');
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.sso_integrations[0]).toEqual(expect.objectContaining({
+      company_id: 'noaq1xgCe5otm425Yhk3',
+      owner_tenant_id: 'noaq1xgCe5otm425Yhk3',
+    }));
+    expect(written.oidc_configurations[0].company_id).toBe('noaq1xgCe5otm425Yhk3');
+  });
+
+  test('proposes owner_tenant_id as the Postgres company_id, falling back to zdna-<domain>-<ts> without one', async () => {
+    const { saveSsoConfig, pgSave } = loadService({
+      usePostgres: true,
+      getByDomainImpl: async () => null,
+    });
+
+    await saveSsoConfig({
+      protocol: 'oidc',
+      domains: 'owner-pg.example.com',
+      tenant_id: 'common',
+      client_id: 'client-pg',
+      auth_method: 'client_secret_post',
+      owner_tenant_id: 'owner-tenant-42',
+    });
+    expect(pgSave).toHaveBeenCalledWith(expect.objectContaining({
+      company_id: 'owner-tenant-42',
+    }));
+
+    // No owner supplied → legacy fallback keeps the PK non-null
+    await saveSsoConfig({
+      protocol: 'oidc',
+      domains: 'no-owner.example.com',
+      tenant_id: 'common',
+      client_id: 'client-pg2',
+      auth_method: 'client_secret_post',
+    });
+    expect(pgSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      company_id: 'zdna-no-owner-example-com-1700000000000',
+    }));
+  });
+
   test('saves OIDC configs to JSON with encrypted client secrets and normalized domains', async () => {
     const { saveSsoConfig, writeFile } = loadService();
 
