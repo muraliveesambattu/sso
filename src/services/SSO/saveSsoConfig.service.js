@@ -268,7 +268,11 @@ const saveSsoConfig = async (payload) => {
     tenant_id, entra_tenant_id: entraTenantId, entraTenantId,
     owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
-    sso_url, entity_id, acs_url, certificate,
+    // Strip ?appid=... (and any other query) here — once, for BOTH stores.
+    // buildSamlRow also strips for the JSON path, but the Postgres path used
+    // to persist the URL verbatim, which corrupted the login redirect
+    // (double '?' → AADSTS750054).
+    sso_url: stripUrlQuery(sso_url), entity_id, acs_url, certificate,
     sign_auth: sign_auth || false,
     private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
     keep_existing_cert: !!keep_existing_cert,

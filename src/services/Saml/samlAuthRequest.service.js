@@ -114,9 +114,13 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
     // Build final redirect URL
     // Signed:   ?SAMLRequest=...&RelayState=...&SigAlg=...&Signature=...
     // Unsigned: ?SAMLRequest=...&RelayState=...
+    // Join with '&' when the stored SSO URL already carries a query string
+    // (e.g. a legacy row saved with ?appid=...) — a second '?' corrupts the
+    // query and Entra rejects the login with AADSTS750054.
+    const sep = ssoUrl.includes('?') ? '&' : '?';
     const redirectUrl = signed
-      ? `${ssoUrl}?SAMLRequest=${urlEncoded}&RelayState=${relayState}&SigAlg=${signed.sigAlg}&Signature=${signed.signature}`
-      : `${ssoUrl}?SAMLRequest=${urlEncoded}&RelayState=${relayState}`;
+      ? `${ssoUrl}${sep}SAMLRequest=${urlEncoded}&RelayState=${relayState}&SigAlg=${signed.sigAlg}&Signature=${signed.signature}`
+      : `${ssoUrl}${sep}SAMLRequest=${urlEncoded}&RelayState=${relayState}`;
 
     logger.debug('[SAML_AUTHN_REQUEST_SIGNED]', !!signed);
     

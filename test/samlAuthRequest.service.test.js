@@ -53,6 +53,23 @@ describe('samlAuthRequest.service', () => {
     service.samlRequestStore.clear();
   });
 
+  test('joins with & when the stored SSO URL already carries a query string (legacy ?appid rows)', async () => {
+    const { service } = loadSamlAuthRequestService();
+
+    const redirectUrl = await service.buildSamlRedirectUrl(
+      'https://sp.example.com/metadata',
+      'https://sp.example.com/callback',
+      'https://login.microsoftonline.com/tenant/saml2?appid=26ad49ad-797a-47aa-8701-d339de837a68',
+      {},
+      'session-1'
+    );
+
+    // A second '?' corrupts the query string — Entra rejects it with AADSTS750054
+    expect((redirectUrl.match(/\?/g) || []).length).toBe(1);
+    expect(redirectUrl).toContain('appid=26ad49ad-797a-47aa-8701-d339de837a68&SAMLRequest=');
+    service.samlRequestStore.clear();
+  });
+
   test('builds a signed SAML redirect when a private key is available via env var', async () => {
     const envKey = Buffer.from('PRIVATE KEY FROM ENV').toString('base64');
     const { service, mocks } = loadSamlAuthRequestService({ envPrivateKeyB64: envKey });

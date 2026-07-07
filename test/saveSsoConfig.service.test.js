@@ -251,6 +251,27 @@ describe('saveSsoConfig.service', () => {
     expect(result.company_id).toBe('existing-company-id');
   });
 
+  test('strips ?appid from the SAML sso_url before the Postgres save (AADSTS750054 regression)', async () => {
+    const { saveSsoConfig, pgSave } = loadService({
+      usePostgres: true,
+      getByDomainImpl: async () => ({ company_id: 'saml-company-id' }),
+    });
+
+    await saveSsoConfig({
+      protocol: 'saml',
+      domains: 'saml-pg.example.com',
+      sso_url: 'https://login.microsoftonline.com/2c761afb-5a70-452a-ab62-b98b90a6e556/saml2?appid=26ad49ad-797a-47aa-8701-d339de837a68',
+    });
+
+    expect(pgSave).toHaveBeenCalledWith(expect.objectContaining({
+      // Query string must never reach the store — the login redirect appends
+      // its own ?SAMLRequest=... and a second '?' breaks the Entra login.
+      sso_url: 'https://login.microsoftonline.com/2c761afb-5a70-452a-ab62-b98b90a6e556/saml2',
+      // Tenant derivation still works from the pre-strip URL's path
+      entra_tenant_id: '2c761afb-5a70-452a-ab62-b98b90a6e556',
+    }));
+  });
+
   // The silent JSON fallback on PostgreSQL failure was removed intentionally:
   // it masked DB write failures (returned 201 while nothing persisted). The
   // error must now propagate so the caller sees the failure.
