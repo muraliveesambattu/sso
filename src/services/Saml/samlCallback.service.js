@@ -259,8 +259,8 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const zdnaTenantId = resolution.user.user_id;
   logger.debug(`[SAML] Generating Firebase Custom Token | uid: ${zdnaTenantId} | email: ${email}`);
 
-  // Resolve permissions (role-management service when configured, else zdna_roles)
-  const resolvedPerms = await resolvePermissions(resolution.roles);
+  // Resolve permissions (RMS when configured, else zdna_roles)
+  const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
 
   const customToken = await generateCustomToken(zdnaTenantId, {
     email:       email,

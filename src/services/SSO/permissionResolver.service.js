@@ -1,27 +1,24 @@
 /**
  * Permission Resolver
  *
- * Single place that answers "what permissions do these roles grant?".
+ * Single place that answers "what permissions does this user's login carry?".
  * Used by token minting (zdnaPermissions claim) and GET /sso/me.
  *
  * Source priority:
- *   1. Role-management microservice — when ROLE_MGMT_URL is configured.
- *      This is the org's designated permission authority (RBAC phase 2).
- *   2. zdna_roles.permissions union — fallback when unconfigured OR when the
- *      role-management call fails. A login must never be blocked by an
+ *   1. RMS (Role Management System) — when configured (see rmsClient.service).
+ *      User-centric, same authority the Phoenix login path uses: the user is
+ *      looked up by email/zuid and their permissionsArr is returned.
+ *   2. zdna_roles.permissions union — when RMS is unconfigured, doesn't know
+ *      the user, or the call fails. A login must never be blocked by an
  *      auxiliary service outage; we degrade to local permissions instead.
  *
  * NOTE: the admin-API middleware (userAuth.middleware) deliberately does NOT
  * use this resolver — our own API's authorization stays on local zdna_roles
  * so it cannot depend on another service's uptime.
- *
- * Env:
- *   ROLE_MGMT_URL         — base URL of the role-management microservice
- *   ROLE_MGMT_API_KEY     — optional service credential (X-Api-Key header)
- *   ROLE_MGMT_TIMEOUT_MS  — request timeout (default 3000)
  */
 
 const { logger } = require('../../config/logger');
+const { isRmsConfigured, fetchUserPermissionsFromRms } = require('./rmsClient.service');
 
 // zdna_roles.permissions is JSON in Postgres but may arrive as a string from
 // the JSON store — normalise to an array.
@@ -41,58 +38,38 @@ const toPermissionArray = (value) => {
 const localPermissions = (roles) =>
   [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
 
-// ── ADAPTER ───────────────────────────────────────────────────────────────────
-// The role-management service's API contract is not final. This function is
-// the ONLY place that knows the request/response shape — adjust it here when
-// the contract lands; nothing else in the codebase cares.
-// Current assumption: POST {ROLE_MGMT_URL}/permissions/resolve
-//   body     { role_ids: ["role-analyst", ...] }
-//   response { permissions: ["...", ...] }
-const fetchPermissionsFromRoleMgmt = async (roleIds) => {
-  const baseUrl   = process.env.ROLE_MGMT_URL.replace(/\/$/, '');
-  const timeoutMs = parseInt(process.env.ROLE_MGMT_TIMEOUT_MS || '3000', 10);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${baseUrl}/permissions/resolve`, {
-      method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(process.env.ROLE_MGMT_API_KEY ? { 'X-Api-Key': process.env.ROLE_MGMT_API_KEY } : {}),
-      },
-      body:   JSON.stringify({ role_ids: roleIds }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`role-management service responded HTTP ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data.permissions)) throw new Error('role-management response missing permissions array');
-    return data.permissions;
-  } finally {
-    clearTimeout(timer);
-  }
-};
-
 /**
  * @param {Array<{role_id: string, permissions?: Array|string}>} roles - resolved zdna_roles rows
- * @returns {Promise<{permissions: string[], source: 'role_mgmt'|'zdna_roles'}>}
+ * @param {{ email?: string, oid?: string, user_id?: string, id?: string }|null} user
+ *        the resolved SSO user — required for the RMS (user-centric) source
+ * @returns {Promise<{permissions: string[], source: 'rms'|'zdna_roles', roleName?: string}>}
  */
-const resolvePermissions = async (roles) => {
+const resolvePermissions = async (roles, user = null) => {
   const roleRows = Array.isArray(roles) ? roles : [];
-  if (roleRows.length === 0) return { permissions: [], source: 'zdna_roles' };
+  const local    = localPermissions(roleRows);
 
-  if (!process.env.ROLE_MGMT_URL) {
-    return { permissions: localPermissions(roleRows), source: 'zdna_roles' };
+  if (!isRmsConfigured() || !user?.email) {
+    return { permissions: local, source: 'zdna_roles' };
   }
 
   try {
-    const permissions = await fetchPermissionsFromRoleMgmt(roleRows.map(r => r.role_id));
-    return { permissions, source: 'role_mgmt' };
-  } catch (err) {
-    logger.warn('Role-management permission fetch failed — falling back to zdna_roles', {
-      action: 'role_mgmt_fallback', error: err.message,
+    const rms = await fetchUserPermissionsFromRms({
+      email:   user.email,
+      // Pending RMS confirmation of the key for Entra-born users (Phoenix
+      // resolves zuid by email via LGE) — until then, oid → user_id → id.
+      userKey: user.oid || user.user_id || user.id || '',
     });
-    return { permissions: localPermissions(roleRows), source: 'zdna_roles' };
+    if (rms.found) {
+      return { permissions: rms.permissions, source: 'rms', roleName: rms.roleName };
+    }
+    // RMS reachable but doesn't know the user (not provisioned there yet —
+    // auto-creating SSO users in RMS is a pending team decision)
+    return { permissions: local, source: 'zdna_roles' };
+  } catch (err) {
+    logger.warn('RMS permission fetch failed — falling back to zdna_roles', {
+      action: 'rms_fallback', error: err.message,
+    });
+    return { permissions: local, source: 'zdna_roles' };
   }
 };
 

@@ -3,6 +3,7 @@ jest.mock('../src/config/logger', () => ({
 }));
 
 const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
+const { __resetRmsTokenCache } = require('../src/services/SSO/rmsClient.service');
 const { logger } = require('../src/config/logger');
 
 const ROLES = [
@@ -10,19 +11,37 @@ const ROLES = [
   { role_id: 'role-analyst', role_name: 'Analyst',       permissions: '["read","write"]' }, // JSON-store string shape
 ];
 
-describe('permissionResolver.service', () => {
+const USER = { user_id: 'uuid-1', email: 'user@example.com', oid: 'oid-123' };
+
+const rmsTokenResponse = { ok: true, json: async () => ({ access_token: 'rms-token', expires_in: 3600 }) };
+const rmsUserFound = {
+  ok: true,
+  json: async () => ({
+    head: { 'sub-code': 3004 },
+    data: { rolesArr: [{ roleName: 'Custom Analyst', permissionsArr: ['console:dashboard', 'console:reports:noaccess'] }] },
+  }),
+};
+const rmsUserMissing = { ok: true, json: async () => ({ head: { 'sub-code': 3001 } }) };
+
+const configureRms = () => {
+  process.env.ROLE_MANAGEMENT_SERVICE_URL = 'http://rms.local/api';
+  process.env.RMS_OAUTH_TOKEN_URL         = 'http://oauth.local/token';
+  process.env.RMS_OAUTH_AUTHORIZATION_KEY = 'Basic svc-key';
+  process.env.DNS_URL                     = 'https://console.local';
+};
+
+describe('permissionResolver.service (RMS user-centric)', () => {
   const OLD_ENV = process.env;
   let fetchSpy;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    __resetRmsTokenCache();
     process.env = { ...OLD_ENV };
-    delete process.env.ROLE_MGMT_URL;
-    delete process.env.ROLE_MGMT_API_KEY;
-    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ permissions: ['console:dashboard', 'console:reports'] }),
-    });
+    delete process.env.ROLE_MANAGEMENT_SERVICE_URL;
+    delete process.env.RMS_OAUTH_TOKEN_URL;
+    delete process.env.RMS_OAUTH_AUTHORIZATION_KEY;
+    fetchSpy = jest.spyOn(global, 'fetch');
   });
 
   afterEach(() => {
@@ -33,59 +52,93 @@ describe('permissionResolver.service', () => {
     process.env = OLD_ENV;
   });
 
-  test('without ROLE_MGMT_URL, unions zdna_roles permissions (parsing string shapes)', async () => {
-    const result = await resolvePermissions(ROLES);
+  test('without RMS config, unions zdna_roles permissions (parsing string shapes)', async () => {
+    const result = await resolvePermissions(ROLES, USER);
 
     expect(result.source).toBe('zdna_roles');
     expect(result.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('with ROLE_MGMT_URL, fetches from the role-management service', async () => {
-    process.env.ROLE_MGMT_URL = 'http://role-mgmt.local/api/';
-    process.env.ROLE_MGMT_API_KEY = 'svc-key';
+  test('without a user (no email), stays local even when RMS is configured', async () => {
+    configureRms();
 
-    const result = await resolvePermissions(ROLES);
+    const result = await resolvePermissions(ROLES, null);
 
-    expect(result).toEqual({ permissions: ['console:dashboard', 'console:reports'], source: 'role_mgmt' });
-    expect(fetchSpy).toHaveBeenCalledWith(
-      'http://role-mgmt.local/api/permissions/resolve',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({ 'X-Api-Key': 'svc-key' }),
-        body: JSON.stringify({ role_ids: ['role-admin', 'role-analyst'] }),
-      }),
-    );
+    expect(result.source).toBe('zdna_roles');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('falls back to zdna_roles when the role-management call fails (login must not block)', async () => {
-    process.env.ROLE_MGMT_URL = 'http://role-mgmt.local';
+  test('fetches OAuth token then the RMS user, mirroring the zdna-functions contract', async () => {
+    configureRms();
+    fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserFound);
+
+    const result = await resolvePermissions(ROLES, USER);
+
+    expect(result).toEqual({
+      permissions: ['console:dashboard', 'console:reports:noaccess'],
+      source: 'rms',
+      roleName: 'Custom Analyst',
+    });
+
+    // Call 1 — token endpoint with the static Authorization key
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, 'http://oauth.local/token', expect.objectContaining({
+      method: 'GET',
+      headers: { Authorization: 'Basic svc-key' },
+    }));
+    // Call 2 — RMS /user with Bearer + zuid + Origin, body { email }
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, 'http://rms.local/api/user', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer rms-token',
+        zuid:          'oid-123',
+        Origin:        'https://console.local',
+      }),
+      body: JSON.stringify({ email: 'user@example.com' }),
+    }));
+  });
+
+  test('caches the OAuth token across calls', async () => {
+    configureRms();
+    fetchSpy
+      .mockResolvedValueOnce(rmsTokenResponse)
+      .mockResolvedValueOnce(rmsUserFound)
+      .mockResolvedValueOnce(rmsUserFound);   // second resolve — no token call
+
+    await resolvePermissions(ROLES, USER);
+    await resolvePermissions(ROLES, USER);
+
+    const tokenCalls = fetchSpy.mock.calls.filter(([url]) => url === 'http://oauth.local/token');
+    expect(tokenCalls).toHaveLength(1);
+  });
+
+  test('falls back to zdna_roles when RMS does not know the user', async () => {
+    configureRms();
+    fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
+
+    const result = await resolvePermissions(ROLES, USER);
+
+    expect(result.source).toBe('zdna_roles');
+    expect(result.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
+  });
+
+  test('falls back to zdna_roles on any RMS failure (login must not block)', async () => {
+    configureRms();
     fetchSpy.mockRejectedValue(new Error('ECONNREFUSED'));
 
-    const result = await resolvePermissions(ROLES);
+    const result = await resolvePermissions(ROLES, USER);
 
     expect(result.source).toBe('zdna_roles');
-    expect(result.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('falling back'),
-      expect.objectContaining({ action: 'role_mgmt_fallback' }),
+      expect.objectContaining({ action: 'rms_fallback' }),
     );
   });
 
-  test('falls back on non-200 and on malformed responses', async () => {
-    process.env.ROLE_MGMT_URL = 'http://role-mgmt.local';
+  test('falls back on non-200 RMS responses', async () => {
+    configureRms();
+    fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
 
-    fetchSpy.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
-    expect((await resolvePermissions(ROLES)).source).toBe('zdna_roles');
-
-    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({ nope: true }) });
-    expect((await resolvePermissions(ROLES)).source).toBe('zdna_roles');
-  });
-
-  test('returns empty permissions for empty roles without calling anything', async () => {
-    process.env.ROLE_MGMT_URL = 'http://role-mgmt.local';
-
-    expect(await resolvePermissions([])).toEqual({ permissions: [], source: 'zdna_roles' });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect((await resolvePermissions(ROLES, USER)).source).toBe('zdna_roles');
   });
 });

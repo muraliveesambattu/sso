@@ -69,9 +69,9 @@ const handleGetMe = async (req, res, next) => {
       });
     }
     const roles = await ssoDataService.getRolesByIds(record.roles || []);
-    // Same source the login token uses (role-management service when
-    // configured, zdna_roles otherwise) — /me and the token can't disagree.
-    const { permissions, source } = await resolvePermissions(roles);
+    // Same source the login token uses (RMS when configured, zdna_roles
+    // otherwise) — /me and the token can't disagree.
+    const { permissions, source } = await resolvePermissions(roles, record);
     return res.status(200).json({
       success: true,
       data: {
