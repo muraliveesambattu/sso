@@ -121,6 +121,52 @@ describe('userResolution.service', () => {
     });
   });
 
+  test('matches department, jobtitle, and app-role mapping sources during JIT provisioning', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'department', mapping_value: 'IT',        role_id: 'role-admin',   priority: 1 },
+      { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-analyst', priority: 2 },
+      { mapping_source: 'role',       mapping_value: 'Zdna.Admin', role_id: 'role-admin',  priority: 3 },
+      { mapping_source: 'default',    mapping_value: null,        role_id: 'role-viewer',  priority: 99 },
+    ]);
+    getRolesByIds.mockImplementation(async (ids) =>
+      ids.map(id => ({ role_id: id, role_name: id })));
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    // department matches case-insensitively ('it' vs 'IT'); jobtitle matches;
+    // no app roles → 'role' mapping skipped; default NOT applied (others matched)
+    await resolveUser('company-1', {
+      email: 'dept@example.com',
+      oid: 'oid-dept',
+      department: 'it',
+      jobTitle: 'Engineer',
+      groups: [],
+    }, 'oidc');
+
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-admin', 'role-analyst']);
+  });
+
+  test('falls back to the default mapping when no attribute matches', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin',  priority: 1 },
+      { mapping_source: 'default',    mapping_value: null, role_id: 'role-viewer', priority: 99 },
+    ]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-viewer', role_name: 'Viewer' }]);
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    await resolveUser('company-1', {
+      email: 'sales@example.com',
+      oid: 'oid-sales',
+      department: 'Sales',
+      groups: [],
+    }, 'oidc');
+
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-viewer']);
+  });
+
   test('updates an existing JIT user on re-login', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([

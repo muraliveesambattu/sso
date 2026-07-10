@@ -17,7 +17,7 @@
 
 const crypto = require('crypto');
 const ssoDataService = require('../services/db/ssoDataService');
-const { toPermissionArray } = require('../middlewares/userAuth.middleware');
+const { resolvePermissions } = require('../services/SSO/permissionResolver.service');
 const { logger } = require('../config/logger');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -69,7 +69,9 @@ const handleGetMe = async (req, res, next) => {
       });
     }
     const roles = await ssoDataService.getRolesByIds(record.roles || []);
-    const permissions = [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+    // Same source the login token uses (role-management service when
+    // configured, zdna_roles otherwise) — /me and the token can't disagree.
+    const { permissions, source } = await resolvePermissions(roles);
     return res.status(200).json({
       success: true,
       data: {
@@ -82,6 +84,7 @@ const handleGetMe = async (req, res, next) => {
         },
         roles,
         permissions,
+        permissions_source: source,
       },
     });
   } catch (err) {

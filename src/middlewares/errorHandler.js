@@ -41,6 +41,8 @@ const SAFE_MESSAGES = {
   DOMAIN_ALREADY_EXISTS:    'This domain is already configured by another organisation.',
   INVALID_ROLE_ID:          'One or more selected roles do not exist. Please refresh and try again.',
   MISSING_ROLES:            'At least one role is required.',
+  INVALID_MAPPING_SOURCE:   'Unsupported mapping type. Use group, department, jobtitle, role, or default.',
+  MISSING_MAPPING_VALUE:    'A value to match against is required for this mapping type.',
   MISSING_ID_TOKEN:         'Authentication required. Please sign in and try again.',
   INVALID_ID_TOKEN:         'Your session is invalid or expired. Please sign in again.',
   INSUFFICIENT_PERMISSIONS: 'You do not have permission to perform this action.',

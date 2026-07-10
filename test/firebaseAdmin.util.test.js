@@ -105,6 +105,54 @@ describe('firebaseAdmin.util', () => {
     expect(token).toBe('firebase-token');
   });
 
+  test('prefers pre-resolved permissions over the zdna_roles union', async () => {
+    const { generateCustomToken, adminMock } = loadFirebaseUtil({
+      env: {
+        FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
+        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+      },
+    });
+
+    await generateCustomToken('user-5', {
+      email: 'user5@example.com',
+      role: 'Analyst',
+      roles: [{ role_id: 'role-analyst', role_name: 'Analyst', permissions: ['read', 'write'] }],
+      permissions: ['console:dashboard'],   // from permissionResolver (role-mgmt service)
+      companyId: 'company-5',
+      displayName: 'User Five',
+    });
+
+    expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-5', expect.objectContaining({
+      zdnaPermissions: ['console:dashboard'],
+    }));
+  });
+
+  test('defers oversized permission lists to /sso/me instead of blowing the claim budget', async () => {
+    const { generateCustomToken, adminMock } = loadFirebaseUtil({
+      env: {
+        FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
+        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+      },
+    });
+
+    const hugePermissions = Array.from({ length: 60 }, (_, i) => `console:feature:${i}:noaccess`);
+    await generateCustomToken('user-6', {
+      email: 'user6@example.com',
+      role: 'Analyst',
+      roles: [],
+      permissions: hugePermissions,
+      companyId: 'company-6',
+      displayName: 'User Six',
+    });
+
+    expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-6', expect.objectContaining({
+      zdnaPermissions: [],
+      zdnaPermissionsRef: 'me',
+    }));
+  });
+
   test('auto-initializes with default credentials in Firebase runtime environments', async () => {
     const { generateCustomToken, adminMock } = loadFirebaseUtil({
       env: { GCLOUD_PROJECT: 'firebase-project' },

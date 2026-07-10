@@ -34,6 +34,7 @@ const microsoft = {
 
   // Microsoft Graph
   graphMemberOf: `${MS_GRAPH_BASE}/v1.0/me/memberOf?$select=id,securityEnabled`,
+  graphMe:       `${MS_GRAPH_BASE}/v1.0/me?$select=department,jobTitle`,
   graphScope:    `${MS_GRAPH_BASE}/.default`,
 
   // Issuer validation pattern for the OIDC `iss` claim (tenant-bound v2.0 issuer)

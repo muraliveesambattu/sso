@@ -4,6 +4,7 @@ const { getSamlConfig } = require('../db/ssoDataService');
 const { verifyXmlSignature }   = require('../../utils/saml/samlSignature.util');
 const { samlRequestStore }     = require('./samlAuthRequest.service');
 const { resolveUser }          = require('../SSO/userResolution.service');
+const { resolvePermissions }   = require('../SSO/permissionResolver.service');
 const { generateCustomToken }  = require('../../utils/firebase/firebaseAdmin.util');
 const {
   validateStatus,
@@ -258,10 +259,14 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const zdnaTenantId = resolution.user.user_id;
   logger.debug(`[SAML] Generating Firebase Custom Token | uid: ${zdnaTenantId} | email: ${email}`);
 
+  // Resolve permissions (role-management service when configured, else zdna_roles)
+  const resolvedPerms = await resolvePermissions(resolution.roles);
+
   const customToken = await generateCustomToken(zdnaTenantId, {
     email:       email,
     role:        resolution.roles[0]?.role_name || 'user',
     roles:       resolution.roles,
+    permissions: resolvedPerms.permissions,
     companyId:   samlConfig.company_id,
     displayName: allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
                  || allAttributes.name

@@ -41,43 +41,77 @@ const extractIdentity = (claims, protocol) => {
       email: a.emailaddress || a.email || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'] || null,
       oid: a.objectidentifier || a['http://schemas.microsoft.com/identity/claims/objectidentifier'] || null,
       displayName: a.name || a.displayname || a.givenname || null,
-      groups: toGroupArray(a.groups)
+      groups: toGroupArray(a.groups),
+      // Optional mapping attributes — present only when the Entra admin adds
+      // them to the SAML claim configuration (user.department / user.jobtitle
+      // / app roles). Absent attributes simply never match a mapping.
+      department: a.department || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department'] || null,
+      jobTitle:   a.jobtitle || a.jobTitle || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
+      appRoles:   toGroupArray(a.role || a.roles),
     };
   }
 
-  // OIDC
+  // OIDC — department/jobTitle are enriched from Graph by the token-exchange
+  // step (the id_token itself never carries them); `roles` is Entra app roles.
   return {
     email: claims.email || claims.preferred_username || claims.upn || null,
     oid: claims.oid || claims.sub || null,
     displayName: claims.name || claims.preferred_username || null,
-    groups: Array.isArray(claims.groups) ? claims.groups : []
+    groups: Array.isArray(claims.groups) ? claims.groups : [],
+    department: claims.department || null,
+    jobTitle:   claims.jobTitle || claims.jobtitle || null,
+    appRoles:   Array.isArray(claims.roles) ? claims.roles : [],
   };
 };
 
 // ── Role Resolution ───────────────────────────────────────────────────────────
 
 /**
- * Maps Entra group memberships to internal role_ids using jit_mappings.
+ * Maps the user's Entra attributes to internal role_ids using jit_mappings.
  * Runs on EVERY login to keep roles in sync.
  *
- * Mapping priority (lower number = higher priority):
- *   mapping_source = 'group'   → matched by group ID/name
- *   mapping_source = 'default' → fallback if no group matches
+ * Supported mapping sources (checked in priority order, lower = higher):
+ *   'group'      → mapping_value matched against Entra group IDs (exact)
+ *   'department' → matched against the user's department (case-insensitive)
+ *   'jobtitle'   → matched against the user's job title (case-insensitive)
+ *   'role'       → matched against Entra APP roles claim (case-insensitive)
+ *   'default'    → fallback when nothing above matched
+ *
+ * Semantics: ALL matching mappings accumulate (a user in two mapped groups
+ * gets both roles); 'default' applies only when no other source matched.
  */
-const resolveRoles = async (companyId, groups) => {
+const norm = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v);
+
+const matchesMapping = (mapping, identity) => {
+  switch (mapping.mapping_source) {
+    case 'group':
+      // Group object-IDs are exact identifiers — no case folding
+      return identity.groups.includes(mapping.mapping_value);
+    case 'department':
+      return !!identity.department && norm(identity.department) === norm(mapping.mapping_value);
+    case 'jobtitle':
+      return !!identity.jobTitle && norm(identity.jobTitle) === norm(mapping.mapping_value);
+    case 'role':
+      return identity.appRoles.some(r => norm(r) === norm(mapping.mapping_value));
+    default:
+      return false; // 'default' is handled as the fallback pass
+  }
+};
+
+const resolveRoles = async (companyId, identity) => {
   const mappings = await getJitMappings(companyId);
   const sorted   = mappings.sort((a, b) => a.priority - b.priority);
 
   const assignedRoleIds = new Set();
 
-  // Pass 1 — match by group membership
+  // Pass 1 — match by attribute (group / department / jobtitle / app role)
   for (const mapping of sorted) {
-    if (mapping.mapping_source === 'group' && groups.includes(mapping.mapping_value)) {
+    if (matchesMapping(mapping, identity)) {
       assignedRoleIds.add(mapping.role_id);
     }
   }
 
-  // Pass 2 — fallback to default mapping if no group matched
+  // Pass 2 — fallback to default mapping if nothing matched
   if (assignedRoleIds.size === 0) {
     const defaultMapping = sorted.find(m => m.mapping_source === 'default');
     if (defaultMapping) assignedRoleIds.add(defaultMapping.role_id);
@@ -134,7 +168,7 @@ const resolveUser = async (companyId, claims, protocol) => {
 
   // ── JIT ENABLED ────────────────────────────────────────────────────────────
   if (jitEnabled) {
-    const roles = await resolveRoles(companyId, identity.groups);
+    const roles = await resolveRoles(companyId, identity);
 
     let user = await findUserByOid(companyId, identity.oid);
     let action;

@@ -53,11 +53,32 @@ const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   }
 };
 
-// Every jit_mappings role must exist in zdna_roles — an unknown role_id would
-// save fine, then resolveRoles → getRolesByIds returns [] and JIT silently
-// creates users with ZERO roles. Reject at save time instead.
-const validateJitRoleIds = async (jit_enabled, jit_mappings) => {
+// Mapping sources the resolution engine actually implements — anything else
+// would save fine and then silently never match at login.
+const VALID_MAPPING_SOURCES = ['group', 'department', 'jobtitle', 'role', 'default'];
+
+// Validates jit_mappings at save time:
+//   - mapping_source must be one the login engine implements
+//   - non-default mappings need a mapping_value to match against
+//   - every zdna_role must exist in zdna_roles (unknown ids would silently
+//     produce zero-role users at login)
+const validateJitMappings = async (jit_enabled, jit_mappings) => {
   if (!jit_enabled || !Array.isArray(jit_mappings) || jit_mappings.length === 0) return;
+
+  for (const m of jit_mappings) {
+    if (!m.zdna_role || !m.mapping_source) continue; // dropped by the row builders anyway
+    const source = String(m.mapping_source).trim().toLowerCase();
+    if (!VALID_MAPPING_SOURCES.includes(source)) {
+      throw fieldError(
+        `mapping_source must be one of: ${VALID_MAPPING_SOURCES.join(', ')} — got '${m.mapping_source}'`,
+        'INVALID_MAPPING_SOURCE'
+      );
+    }
+    if (source !== 'default' && !m.mapping_value) {
+      throw fieldError(`mapping_value is required for '${source}' mappings`, 'MISSING_MAPPING_VALUE');
+    }
+  }
+
   const requested = [...new Set(jit_mappings.filter(m => m.zdna_role).map(m => m.zdna_role))];
   if (requested.length === 0) return;
 
@@ -69,6 +90,21 @@ const validateJitRoleIds = async (jit_enabled, jit_mappings) => {
   if (unknown.length) {
     throw fieldError(`Unknown role_id(s) in jit_mappings: ${unknown.join(', ')}`, 'INVALID_ROLE_ID');
   }
+};
+
+// Normalises validated mappings once for BOTH stores: lowercases the source
+// and resolves priority — the frontend's explicit `order` wins when every row
+// has a unique finite order; otherwise array position decides (as before).
+const normalizeJitMappings = (jit_mappings) => {
+  if (!Array.isArray(jit_mappings)) return jit_mappings;
+  const rows = jit_mappings.filter(m => m.zdna_role && m.mapping_source);
+  const orders   = rows.map(m => Number(m.order));
+  const useOrder = rows.length > 0 && orders.every(Number.isFinite) && new Set(orders).size === rows.length;
+  return rows.map((m, i) => ({
+    ...m,
+    mapping_source: String(m.mapping_source).trim().toLowerCase(),
+    priority:       useOrder ? Number(m.order) : i + 1,
+  }));
 };
 
 // SAML has no tenant_id field — derive the Azure tenant GUID from the IdP
@@ -151,7 +187,7 @@ const buildJitRows = (company_id, jit_mappings) =>
       mapping_source: m.mapping_source,
       mapping_value:  m.mapping_value || null,
       role_id:        m.zdna_role,
-      priority:       i + 1,
+      priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
       status:         DEFAULTS.SSO_STATUS,
     }));
 
@@ -255,7 +291,8 @@ const saveSsoConfig = async (payload) => {
   } = payload;
 
   validateRequiredFields(payload);
-  await validateJitRoleIds(jit_enabled, jit_mappings);
+  await validateJitMappings(jit_enabled, jit_mappings);
+  const normalizedJitMappings = normalizeJitMappings(jit_mappings);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =
@@ -283,7 +320,7 @@ const saveSsoConfig = async (payload) => {
     sign_auth: sign_auth || false,
     private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
     keep_existing_cert: !!keep_existing_cert,
-    jit_enabled, jit_mappings,
+    jit_enabled, jit_mappings: normalizedJitMappings,
   };
 
   let company_id;

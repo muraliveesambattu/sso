@@ -88,7 +88,21 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
 
     // ── PRODUCTION ────────────────────────────────────────────────────────────
     const roles = Array.isArray(claims.roles) ? claims.roles : [];
-    const zdnaPermissions = [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+    // Prefer the pre-resolved permission list (permissionResolver — may come
+    // from the role-management service); fall back to the zdna_roles union.
+    let zdnaPermissions = Array.isArray(claims.permissions)
+      ? claims.permissions
+      : [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+
+    // Firebase custom-token claims share a ~1KB budget. If the permission list
+    // would blow it, mint a marker instead — the frontend fetches the full set
+    // from GET /sso/me.
+    let zdnaPermissionsRef;
+    if (JSON.stringify(zdnaPermissions).length > 800) {
+      logger.warn(`[FIREBASE] zdnaPermissions too large for token claims — deferring to /sso/me | uid: ${zdnaTenantId}`);
+      zdnaPermissions    = [];
+      zdnaPermissionsRef = 'me';
+    }
 
     const additionalClaims = {
       email:       claims.email,
@@ -100,9 +114,10 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
       displayName: claims.displayName || '',
       // Full RBAC picture — `role` above only carries roles[0] and gets
       // remapped by the console's AuthProvider; these two claims preserve
-      // every resolved role + the union of their zdna_roles permissions.
+      // every resolved role + their permissions.
       zdnaRoles:       roles.map(r => ({ id: r.role_id, name: r.role_name })),
       zdnaPermissions,
+      ...(zdnaPermissionsRef ? { zdnaPermissionsRef } : {}),
     };
 
     const customToken = await admin.auth().createCustomToken(zdnaTenantId, additionalClaims);

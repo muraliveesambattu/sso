@@ -149,6 +149,7 @@ describe('oidcTokenExchange.service', () => {
       email: 'user@example.com',
       role: 'Administrator',
       roles: [{ role_name: 'Administrator' }],
+      permissions: [],
       companyId: 'company-1',
       displayName: 'User One',
     });

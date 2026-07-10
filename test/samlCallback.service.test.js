@@ -220,6 +220,7 @@ describe('samlCallback.service', () => {
       email: 'user@example.com',
       role: 'Administrator',
       roles: [{ role_name: 'Administrator' }],
+      permissions: [],
       companyId: 'company-1',
       displayName: 'Test User',
     });

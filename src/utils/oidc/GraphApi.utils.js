@@ -84,4 +84,50 @@ const fetchUserGroupsFromGraph = async (accessToken) => {
   return allGroups;
 };
 
-module.exports = { fetchUserGroupsFromGraph };
+// Raw single-object GET against Graph (fetchGraphPage is page-shaped; /me is not)
+const fetchGraphObject = (accessToken, url) => {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const options = {
+      hostname: parsedUrl.hostname,
+      path:     parsedUrl.pathname + parsedUrl.search,
+      method:   'GET',
+      headers: {
+        Authorization:  `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout:            10000,
+      rejectUnauthorized: process.env.NODE_ENV === 'production'
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode === 200) resolve(JSON.parse(data));
+          else reject(new Error(`Graph API failed: HTTP ${res.statusCode}`));
+        } catch (err) {
+          reject(new Error(`Failed to parse Graph API response: ${err.message}`));
+        }
+      });
+    });
+    req.on('error',   err => reject(new Error(`Graph API network error: ${err.message}`)));
+    req.on('timeout', ()  => { req.destroy(); reject(new Error('Graph API request timed out')); });
+    req.end();
+  });
+};
+
+/**
+ * Fetches the signed-in user's department and job title.
+ * Feeds the department/jobtitle JIT mapping sources — the id_token does not
+ * carry these attributes, so Graph is the only reliable source on OIDC.
+ * Requires User.Read (delegated), granted by the default sign-in consent.
+ *
+ * @returns {Promise<{department: string|null, jobTitle: string|null}>}
+ */
+const fetchUserProfileFromGraph = async (accessToken) => {
+  const me = await fetchGraphObject(accessToken, microsoft.graphMe);
+  return { department: me.department ?? null, jobTitle: me.jobTitle ?? null };
+};
+
+module.exports = { fetchUserGroupsFromGraph, fetchUserProfileFromGraph };

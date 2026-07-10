@@ -115,6 +115,58 @@ describe('saveSsoConfig.service', () => {
     });
   });
 
+  test('rejects unsupported mapping_source values and missing mapping_value (the "Deaprtment" bug)', async () => {
+    const { saveSsoConfig } = loadService();
+
+    await expect(saveSsoConfig({
+      protocol: 'oidc', domains: 'example.com', tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [{ mapping_source: 'Deaprtment', mapping_value: 'it', zdna_role: 'role-admin' }],
+    })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_MAPPING_SOURCE' });
+
+    await expect(saveSsoConfig({
+      protocol: 'oidc', domains: 'example.com', tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [{ mapping_source: 'department', zdna_role: 'role-admin' }],
+    })).rejects.toMatchObject({ statusCode: 400, code: 'MISSING_MAPPING_VALUE' });
+  });
+
+  test('normalises mapping_source casing and honours the frontend order field as priority', async () => {
+    const { saveSsoConfig, writeFile } = loadService();
+
+    await saveSsoConfig({
+      protocol: 'oidc', domains: 'ordered.com', tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [
+        { mapping_source: 'Department', mapping_value: 'IT',    zdna_role: 'role-admin',   order: 5 },
+        { mapping_source: 'GROUP',      mapping_value: 'grp-1', zdna_role: 'role-analyst', order: 2 },
+      ],
+    });
+
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.jit_mappings).toEqual([
+      expect.objectContaining({ mapping_source: 'department', role_id: 'role-admin',   priority: 5 }),
+      expect.objectContaining({ mapping_source: 'group',      role_id: 'role-analyst', priority: 2 }),
+    ]);
+  });
+
+  test('falls back to array-position priority when order values are missing or duplicated', async () => {
+    const { saveSsoConfig, writeFile } = loadService();
+
+    await saveSsoConfig({
+      protocol: 'oidc', domains: 'dup-order.com', tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [
+        { mapping_source: 'group',   mapping_value: 'g1', zdna_role: 'role-admin',   order: 1 },
+        { mapping_source: 'group',   mapping_value: 'g2', zdna_role: 'role-analyst', order: 1 }, // duplicate
+        { mapping_source: 'default', mapping_value: null, zdna_role: 'role-viewer' },            // missing
+      ],
+    });
+
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.jit_mappings.map(m => m.priority)).toEqual([1, 2, 3]);
+  });
+
   test('uses owner_tenant_id as the company_id when provided (matches deactivate/delete keying)', async () => {
     const { saveSsoConfig, writeFile } = loadService();
 

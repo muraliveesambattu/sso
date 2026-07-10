@@ -7,8 +7,9 @@ const { getSsoIntegrationByCompanyId, getOidcConfig } = require('../db/ssoDataSe
 const { verifyJwtSignature }                      = require('../../utils/oidc/jwkValidation.util');
 const { validateTokenClaims, validateUserClaims } = require('../../utils/oidc/tokenValidation.util');
 const { exchangeCodeForTokens, decodeJwt, generateJwtAssertion } = require('../../utils/oidc/tokenExchange.util');
-const { fetchUserGroupsFromGraph }                = require('../../utils/oidc/GraphApi.utils');
+const { fetchUserGroupsFromGraph, fetchUserProfileFromGraph } = require('../../utils/oidc/GraphApi.utils');
 const { resolveUser }                             = require('../SSO/userResolution.service');
+const { resolvePermissions }                      = require('../SSO/permissionResolver.service');
 const { generateCustomToken }                     = require('../../utils/firebase/firebaseAdmin.util');
 const { logger }                                  = require('../../config/logger');
 const { microsoft }                               = require('../../config/constants');
@@ -113,8 +114,28 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     logger.debug('Step 7.5 OK: Tenant validated', { action: 'step_tenant', stored: storedTenantId });
 
     // Step 8 — Resolve groups + identity
-    const groups        = await resolveUserGroups(idTokenClaims, tokens.access_token);
-    const enrichedClaims = { ...idTokenClaims, groups };
+    const groups = await resolveUserGroups(idTokenClaims, tokens.access_token);
+
+    // Department/job title feed the department/jobtitle JIT mapping sources.
+    // The id_token never carries them, so ask Graph — but only when JIT is on
+    // (non-JIT ignores mappings), and never let a profile failure kill a login.
+    let profile = { department: null, jobTitle: null };
+    if (ssoIntegration.jit_enabled) {
+      try {
+        profile = await fetchUserProfileFromGraph(tokens.access_token);
+      } catch (err) {
+        logger.warn('Graph profile fetch failed — department/jobtitle mappings inactive this login', {
+          action: 'graph_profile_failed', error: err.message,
+        });
+      }
+    }
+
+    const enrichedClaims = {
+      ...idTokenClaims,
+      groups,
+      department: profile.department,
+      jobTitle:   profile.jobTitle,
+    };
     const userClaims    = validateUserClaims(enrichedClaims, null);
     logger.info('Step 8 OK: Identity extracted', {
       action: 'step_identity', groups: groups.length,
@@ -125,12 +146,17 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     const resolution = await resolveUser(companyId, enrichedClaims, 'oidc');
     logger.info('Step 9 OK: User resolved', { action: 'step_user', userAction: resolution.action });
 
+    // Step 9.5 — Resolve permissions (role-management service when configured,
+    // zdna_roles union otherwise — see permissionResolver.service.js)
+    const resolvedPerms = await resolvePermissions(resolution.roles);
+
     // Step 10 — Generate Firebase Custom Token
     const zdnaTenantId = resolution.user.user_id;
     const customToken  = await generateCustomToken(zdnaTenantId, {
       email:       userClaims.email,
       role:        resolution.roles[0]?.role_name || 'user',
       roles:       resolution.roles,
+      permissions: resolvedPerms.permissions,
       companyId,
       displayName: userClaims.name || userClaims.preferred_username || '',
     });

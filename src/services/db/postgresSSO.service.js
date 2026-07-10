@@ -295,7 +295,7 @@ const saveSsoConfig = async ({
           mapping_source: m.mapping_source,
           mapping_value:  m.mapping_value || null,
           role_id:        m.zdna_role,
-          priority:       i + 1,
+          priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
           status:         'active',
         }));
       await JitMapping.bulkCreate(rows, { transaction: tx });
