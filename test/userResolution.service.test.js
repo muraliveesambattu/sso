@@ -167,6 +167,31 @@ describe('userResolution.service', () => {
     expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
   });
 
+  test('passes through a JIT-mapped role that is not in the local zdna_roles catalog', async () => {
+    // jit_mappings.role_id may hold a name from the tenant's own RMS role
+    // catalog rather than a local zdna_roles id — getRolesByIds legitimately
+    // finds nothing for it, and resolveRoles must still surface the role
+    // (with empty local permissions) instead of silently dropping it.
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'department', mapping_value: 'IT', role_id: 'Field Technician', priority: 1 },
+    ]);
+    getRolesByIds.mockResolvedValue([]); // unknown to zdna_roles
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    const { roles } = await resolveUser('company-1', {
+      email: 'tech@example.com',
+      oid: 'oid-tech',
+      department: 'IT',
+      groups: [],
+    }, 'oidc');
+
+    expect(roles).toEqual([
+      { role_id: 'Field Technician', role_name: 'Field Technician', permissions: [] },
+    ]);
+  });
+
   test('updates an existing JIT user on re-login', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([

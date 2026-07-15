@@ -49,17 +49,8 @@ const loadService = ({
     }));
   }
 
-  // JIT role resolution loads the full catalog via the data service — default
-  // to the real three roles (by both id and name) so save tests stay focused.
-  const getAllRoles = jest.fn(async () => ([
-    { role_id: 'role-admin', role_name: 'Admin', permissions: [] },
-    { role_id: 'role-manager', role_name: 'Manager', permissions: [] },
-    { role_id: 'role-temporary', role_name: 'Temporary', permissions: [] },
-  ]));
-  jest.doMock('../src/services/db/ssoDataService', () => ({ getAllRoles }));
-
   const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
-  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain, getAllRoles };
+  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain };
 };
 
 describe('saveSsoConfig.service', () => {
@@ -97,43 +88,24 @@ describe('saveSsoConfig.service', () => {
     await expect(saveSsoConfig({ protocol: 'saml', domains: 'example.com', sso_url: 'ftp://bad-url' })).rejects.toMatchObject({ code: 'INVALID_SSO_URL' });
   });
 
-  test('rejects jit_mappings that reference unknown role_ids', async () => {
-    const { saveSsoConfig, getAllRoles } = loadService();
-    // Only role-manager exists — role-ghost must be rejected before persisting
-    getAllRoles.mockImplementation(async () =>
-      [{ role_id: 'role-manager', role_name: 'Manager', permissions: [] }]);
-
-    await expect(saveSsoConfig({
-      protocol: 'oidc',
-      domains: 'example.com',
-      tenant_id: 'common',
-      jit_enabled: true,
-      jit_mappings: [
-        { mapping_source: 'default', zdna_role: 'role-manager' },
-        { mapping_source: 'group', mapping_value: 'grp-1', zdna_role: 'role-ghost' },
-      ],
-    })).rejects.toMatchObject({
-      statusCode: 400,
-      code: 'INVALID_ROLE_ID',
-    });
-  });
-
-  test('resolves RMS role names (e.g. "Admin") to their canonical zdna_roles.role_id', async () => {
+  test('accepts arbitrary RMS role names as-is — not validated against zdna_roles', async () => {
     const { saveSsoConfig, writeFile } = loadService();
 
+    // RMS roles are defined per-tenant and are not enumerable from this
+    // backend — a name with no matching zdna_roles row must save fine.
     await saveSsoConfig({
       protocol: 'oidc', domains: 'rms-names.com', tenant_id: 'common',
       jit_enabled: true,
       jit_mappings: [
-        { mapping_source: 'department', mapping_value: 'IT', zdna_role: 'Admin' },
-        { mapping_source: 'default', zdna_role: 'manager' }, // case-insensitive
+        { mapping_source: 'department', mapping_value: 'IT', zdna_role: 'Field Technician' },
+        { mapping_source: 'default', zdna_role: 'Supervisor' },
       ],
     });
 
     const written = JSON.parse(writeFile.mock.calls[0][1]);
     expect(written.jit_mappings).toEqual([
-      expect.objectContaining({ mapping_source: 'department', role_id: 'role-admin' }),
-      expect.objectContaining({ mapping_source: 'default', role_id: 'role-manager' }),
+      expect.objectContaining({ mapping_source: 'department', role_id: 'Field Technician' }),
+      expect.objectContaining({ mapping_source: 'default', role_id: 'Supervisor' }),
     ]);
   });
 

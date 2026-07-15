@@ -118,7 +118,20 @@ const resolveRoles = async (companyId, identity) => {
   }
 
   const roleIds = [...assignedRoleIds];
-  return getRolesByIds(roleIds);
+  const known   = await getRolesByIds(roleIds);
+
+  // jit_mappings.role_id may hold a role name from the tenant's own RMS
+  // catalog rather than a local zdna_roles id (RMS roles are per-tenant and
+  // not enumerable here — see saveSsoConfig.service.js). Any id not found
+  // locally is passed through as-is so the user still gets a role label;
+  // real permissions for RMS-integrated companies come from
+  // permissionResolver's RMS-by-email lookup regardless of this value.
+  const knownIds    = new Set(known.map(r => r.role_id));
+  const passthrough = roleIds
+    .filter(id => !knownIds.has(id))
+    .map(id => ({ role_id: id, role_name: id, permissions: [] }));
+
+  return [...known, ...passthrough];
 };
 
 // User store helpers delegate to localSSO.service.js (reads/writes src/data/ssoConfig.json)
