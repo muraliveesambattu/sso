@@ -64,7 +64,7 @@ describe('oidcTokenExchange.service', () => {
     validateUserClaims.mockReturnValue({ email: 'user@example.com', name: 'User One' });
     resolveUser.mockResolvedValue({
       user: { user_id: 'user-1', email: 'user@example.com' },
-      roles: [{ role_name: 'Administrator' }],
+      roles: [{ role_name: 'Admin' }],
       action: 'created',
     });
     generateCustomToken.mockResolvedValue('firebase-custom-token');
@@ -147,8 +147,8 @@ describe('oidcTokenExchange.service', () => {
     }), 'oidc');
     expect(generateCustomToken).toHaveBeenCalledWith('user-1', {
       email: 'user@example.com',
-      role: 'Administrator',
-      roles: [{ role_name: 'Administrator' }],
+      role: 'Admin',
+      roles: [{ role_name: 'Admin' }],
       permissions: [],
       companyId: 'company-1',
       displayName: 'User One',

@@ -17,8 +17,8 @@ const loadLocalService = ({ initialData, env = {} } = {}) => {
       { company_id: 'company-1', role_id: 'role-old', status: 'inactive' },
     ],
     zdna_roles: [
-      { role_id: 'role-admin', role_name: 'Administrator' },
-      { role_id: 'role-viewer', role_name: 'Viewer' },
+      { role_id: 'role-admin', role_name: 'Admin' },
+      { role_id: 'role-temporary', role_name: 'Temporary' },
     ],
     sso_users: [
       { id: 'user-1', company_id: 'company-1', email: 'user@example.com', oid: 'oid-1', roles: ['role-admin'] },

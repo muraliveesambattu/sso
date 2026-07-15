@@ -29,44 +29,44 @@ router.post('/admin/flags',            requireAdminKey, updateFlag);
 
 // ── RBAC: roles, current user, user provisioning ──────────────────────────────
 
-// Role catalogue — every role can read it (feeds the JIT-mapping dropdown)
-router.get('/sso/roles', requireAdminKeyOrPermission('read'), handleListRoles);
+// Role catalogue — feeds the JIT-mapping dropdown in the SSO setup screens
+router.get('/sso/roles', requireAdminKeyOrPermission('my_services:view'), handleListRoles);
 
 // Caller's own roles + permissions, fresh from the DB (Bearer token only)
 router.get('/sso/me', requireUser, handleGetMe);
 
 // Pre-provisioning CRUD — required for non-JIT companies
-router.get('/sso/users',             requireAdminKeyOrPermission('manage_users'), handleListUsers);
-router.post('/sso/users',            requireAdminKeyOrPermission('manage_users'), handleCreateUser);
-router.patch('/sso/users/:user_id',  requireAdminKeyOrPermission('manage_users'), handleUpdateUser);
-router.delete('/sso/users/:user_id', requireAdminKeyOrPermission('manage_users'), handleDeleteUser);
+router.get('/sso/users',             requireAdminKeyOrPermission('users:editable'), handleListUsers);
+router.post('/sso/users',            requireAdminKeyOrPermission('users:editable'), handleCreateUser);
+router.patch('/sso/users/:user_id',  requireAdminKeyOrPermission('users:editable'), handleUpdateUser);
+router.delete('/sso/users/:user_id', requireAdminKeyOrPermission('users:editable'), handleDeleteUser);
 
 // ── SSO configuration ─────────────────────────────────────────────────────────
 
 // SSO configuration test — Phase 1: verifies credentials against Microsoft Entra,
 // returns { config, sessionRef } for the browser popup flow (secrets stay in tcStore)
-// Protected: admin key or 'write' permission
-router.post('/test-connection', requireAdminKeyOrPermission('write'), handleTestConnection);
+// Protected: admin key or editable access to My Services
+router.post('/test-connection', requireAdminKeyOrPermission('my_services:editable'), handleTestConnection);
 
 // SSO configuration test — Phase 2: parent window posts { code, state, sessionRef }
 // after the Azure popup returns. No admin key — single-use sessionRef is the credential.
 router.post('/test-connection/oidc/callback', oidcTestCallbackController);
 
 // Save & activate SSO configuration with optional JIT mappings
-// Protected: admin key or 'write' permission
-router.post('/sso/save', requireAdminKeyOrPermission('write'), handleSaveSsoConfig);
+// Protected: admin key or editable access to My Services
+router.post('/sso/save', requireAdminKeyOrPermission('my_services:editable'), handleSaveSsoConfig);
 
 // Retrieve full SSO config by company_id or domain (secrets masked)
-// Protected: admin key or 'read' permission (token callers get their own company)
-router.get('/sso/config', requireAdminKeyOrPermission('read'), handleGetSsoConfig);
+// Protected: admin key or view access to My Services (token callers get their own company)
+router.get('/sso/config', requireAdminKeyOrPermission('my_services:view'), handleGetSsoConfig);
 
 // Activate / deactivate SSO for a company
-// Protected: admin key or 'write' permission
-router.patch('/sso/config/:company_id/status', requireAdminKeyOrPermission('write'), handleSetSsoStatus);
+// Protected: admin key or editable access to My Services
+router.patch('/sso/config/:company_id/status', requireAdminKeyOrPermission('my_services:editable'), handleSetSsoStatus);
 
 // Delete SSO configuration (integration + OIDC/SAML + JIT mappings)
-// Protected: admin key or 'delete' permission
-router.delete('/sso/config/:company_id', requireAdminKeyOrPermission('delete'), handleDeleteSsoConfig);
+// Protected: admin key or editable access to My Services
+router.delete('/sso/config/:company_id', requireAdminKeyOrPermission('my_services:editable'), handleDeleteSsoConfig);
 
 // Domain check — entry point for both SAML and OIDC flows
 // Rate limited to 10 req/IP/min to prevent domain enumeration

@@ -49,14 +49,17 @@ const loadService = ({
     }));
   }
 
-  // JIT role validation looks role_ids up via the data service — treat every
-  // requested id as a known role by default so save tests stay focused.
-  const getRolesByIds = jest.fn(async (ids) =>
-    ids.map((id) => ({ role_id: id, role_name: id, permissions: [] })));
-  jest.doMock('../src/services/db/ssoDataService', () => ({ getRolesByIds }));
+  // JIT role resolution loads the full catalog via the data service — default
+  // to the real three roles (by both id and name) so save tests stay focused.
+  const getAllRoles = jest.fn(async () => ([
+    { role_id: 'role-admin', role_name: 'Admin', permissions: [] },
+    { role_id: 'role-manager', role_name: 'Manager', permissions: [] },
+    { role_id: 'role-temporary', role_name: 'Temporary', permissions: [] },
+  ]));
+  jest.doMock('../src/services/db/ssoDataService', () => ({ getAllRoles }));
 
   const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
-  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain, getRolesByIds };
+  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain, getAllRoles };
 };
 
 describe('saveSsoConfig.service', () => {
@@ -95,10 +98,10 @@ describe('saveSsoConfig.service', () => {
   });
 
   test('rejects jit_mappings that reference unknown role_ids', async () => {
-    const { saveSsoConfig, getRolesByIds } = loadService();
-    // Only role-analyst exists — role-ghost must be rejected before persisting
-    getRolesByIds.mockImplementation(async (ids) =>
-      ids.filter((id) => id === 'role-analyst').map((id) => ({ role_id: id, role_name: 'Analyst', permissions: [] })));
+    const { saveSsoConfig, getAllRoles } = loadService();
+    // Only role-manager exists — role-ghost must be rejected before persisting
+    getAllRoles.mockImplementation(async () =>
+      [{ role_id: 'role-manager', role_name: 'Manager', permissions: [] }]);
 
     await expect(saveSsoConfig({
       protocol: 'oidc',
@@ -106,13 +109,32 @@ describe('saveSsoConfig.service', () => {
       tenant_id: 'common',
       jit_enabled: true,
       jit_mappings: [
-        { mapping_source: 'default', zdna_role: 'role-analyst' },
+        { mapping_source: 'default', zdna_role: 'role-manager' },
         { mapping_source: 'group', mapping_value: 'grp-1', zdna_role: 'role-ghost' },
       ],
     })).rejects.toMatchObject({
       statusCode: 400,
       code: 'INVALID_ROLE_ID',
     });
+  });
+
+  test('resolves RMS role names (e.g. "Admin") to their canonical zdna_roles.role_id', async () => {
+    const { saveSsoConfig, writeFile } = loadService();
+
+    await saveSsoConfig({
+      protocol: 'oidc', domains: 'rms-names.com', tenant_id: 'common',
+      jit_enabled: true,
+      jit_mappings: [
+        { mapping_source: 'department', mapping_value: 'IT', zdna_role: 'Admin' },
+        { mapping_source: 'default', zdna_role: 'manager' }, // case-insensitive
+      ],
+    });
+
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.jit_mappings).toEqual([
+      expect.objectContaining({ mapping_source: 'department', role_id: 'role-admin' }),
+      expect.objectContaining({ mapping_source: 'default', role_id: 'role-manager' }),
+    ]);
   });
 
   test('rejects unsupported mapping_source values and missing mapping_value (the "Deaprtment" bug)', async () => {
@@ -139,14 +161,14 @@ describe('saveSsoConfig.service', () => {
       jit_enabled: true,
       jit_mappings: [
         { mapping_source: 'Department', mapping_value: 'IT',    zdna_role: 'role-admin',   order: 5 },
-        { mapping_source: 'GROUP',      mapping_value: 'grp-1', zdna_role: 'role-analyst', order: 2 },
+        { mapping_source: 'GROUP',      mapping_value: 'grp-1', zdna_role: 'role-manager', order: 2 },
       ],
     });
 
     const written = JSON.parse(writeFile.mock.calls[0][1]);
     expect(written.jit_mappings).toEqual([
       expect.objectContaining({ mapping_source: 'department', role_id: 'role-admin',   priority: 5 }),
-      expect.objectContaining({ mapping_source: 'group',      role_id: 'role-analyst', priority: 2 }),
+      expect.objectContaining({ mapping_source: 'group',      role_id: 'role-manager', priority: 2 }),
     ]);
   });
 
@@ -158,8 +180,8 @@ describe('saveSsoConfig.service', () => {
       jit_enabled: true,
       jit_mappings: [
         { mapping_source: 'group',   mapping_value: 'g1', zdna_role: 'role-admin',   order: 1 },
-        { mapping_source: 'group',   mapping_value: 'g2', zdna_role: 'role-analyst', order: 1 }, // duplicate
-        { mapping_source: 'default', mapping_value: null, zdna_role: 'role-viewer' },            // missing
+        { mapping_source: 'group',   mapping_value: 'g2', zdna_role: 'role-manager', order: 1 }, // duplicate
+        { mapping_source: 'default', mapping_value: null, zdna_role: 'role-temporary' },            // missing
       ],
     });
 
@@ -231,7 +253,7 @@ describe('saveSsoConfig.service', () => {
       auth_method: 'client_secret',
       client_secret: 'super-secret',
       jit_enabled: true,
-      jit_mappings: [{ mapping_source: 'default', zdna_role: 'role-analyst' }],
+      jit_mappings: [{ mapping_source: 'default', zdna_role: 'role-manager' }],
     });
 
     const written = JSON.parse(writeFile.mock.calls[0][1]);
@@ -253,7 +275,7 @@ describe('saveSsoConfig.service', () => {
     expect(written.jit_mappings[0]).toEqual(expect.objectContaining({
       company_id: 'zdna-Example-COM-1700000000000',
       mapping_source: 'default',
-      role_id: 'role-analyst',
+      role_id: 'role-manager',
       status: 'active',
     }));
     expect(result).toEqual({

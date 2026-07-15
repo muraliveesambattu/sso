@@ -73,7 +73,7 @@ describe('oidcTokenExchange.controller', () => {
     oidcTokenExchangeService.mockResolvedValue({
       customToken: 'firebase-token',
       user: { email: 'user@example.com' },
-      roles: [{ role_name: 'Administrator' }],
+      roles: [{ role_name: 'Admin' }],
       userAction: 'created',
       session: { protocol: 'oidc' },
     });
@@ -87,7 +87,7 @@ describe('oidcTokenExchange.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       customToken: 'firebase-token',
       user: { email: 'user@example.com' },
-      roles: [{ role_name: 'Administrator' }],
+      roles: [{ role_name: 'Admin' }],
       userAction: 'created',
       session: { protocol: 'oidc' },
     });

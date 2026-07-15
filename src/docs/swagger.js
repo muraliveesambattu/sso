@@ -161,7 +161,7 @@ X-Admin-API-Key: <your-admin-api-key>
                 type: 'object',
                 properties: {
                   role_id:   { type: 'string', example: 'role-admin' },
-                  role_name: { type: 'string', example: 'Administrator' },
+                  role_name: { type: 'string', example: 'Admin' },
                 },
               },
             },

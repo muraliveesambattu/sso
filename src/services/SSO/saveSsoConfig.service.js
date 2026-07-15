@@ -57,13 +57,22 @@ const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
 // would save fine and then silently never match at login.
 const VALID_MAPPING_SOURCES = ['group', 'department', 'jobtitle', 'role', 'default'];
 
-// Validates jit_mappings at save time:
+// Validates + resolves jit_mappings at save time:
 //   - mapping_source must be one the login engine implements
 //   - non-default mappings need a mapping_value to match against
-//   - every zdna_role must exist in zdna_roles (unknown ids would silently
-//     produce zero-role users at login)
-const validateJitMappings = async (jit_enabled, jit_mappings) => {
-  if (!jit_enabled || !Array.isArray(jit_mappings) || jit_mappings.length === 0) return;
+//   - every zdna_role must resolve to a zdna_roles row — either by role_id
+//     directly (e.g. 'role-admin', Postman/API callers) or by role_name,
+//     case-insensitive (e.g. 'Admin' — the console's JIT Role dropdown is fed
+//     by the tenant's RMS role catalog, which only exposes names, and
+//     zdna_roles.role_name now mirrors those exact console role names).
+// Returns jit_mappings with zdna_role rewritten to the canonical role_id, so
+// everything downstream (buildJitRows, login-time resolution) only ever sees
+// a real zdna_roles.role_id — the FK and the JIT resolution engine are
+// unaffected by what the caller submitted.
+const resolveJitMappingRoles = async (jit_enabled, jit_mappings) => {
+  if (!jit_enabled || !Array.isArray(jit_mappings) || jit_mappings.length === 0) {
+    return jit_mappings;
+  }
 
   for (const m of jit_mappings) {
     if (!m.zdna_role || !m.mapping_source) continue; // dropped by the row builders anyway
@@ -79,17 +88,33 @@ const validateJitMappings = async (jit_enabled, jit_mappings) => {
     }
   }
 
-  const requested = [...new Set(jit_mappings.filter(m => m.zdna_role).map(m => m.zdna_role))];
-  if (requested.length === 0) return;
+  if (jit_mappings.every(m => !m.zdna_role)) return jit_mappings;
 
   // Lazy require — keeps module load free of the data layer (and its ORM).
-  const { getRolesByIds } = require('../db/ssoDataService');
-  const found   = await getRolesByIds(requested);
-  const known   = new Set(found.map(r => r.role_id));
-  const unknown = requested.filter(id => !known.has(id));
-  if (unknown.length) {
-    throw fieldError(`Unknown role_id(s) in jit_mappings: ${unknown.join(', ')}`, 'INVALID_ROLE_ID');
+  const { getAllRoles } = require('../db/ssoDataService');
+  const roles  = await getAllRoles();
+  const byId   = new Map(roles.map(r => [r.role_id, r.role_id]));
+  const byName = new Map(roles.map(r => [String(r.role_name).trim().toLowerCase(), r.role_id]));
+
+  const unresolved = [];
+  const resolved = jit_mappings.map((m) => {
+    if (!m.zdna_role) return m;
+    const roleId = byId.get(m.zdna_role) || byName.get(String(m.zdna_role).trim().toLowerCase());
+    if (!roleId) {
+      unresolved.push(m.zdna_role);
+      return m;
+    }
+    return { ...m, zdna_role: roleId };
+  });
+
+  if (unresolved.length) {
+    throw fieldError(
+      `Unknown role_id/role_name(s) in jit_mappings: ${[...new Set(unresolved)].join(', ')}`,
+      'INVALID_ROLE_ID'
+    );
   }
+
+  return resolved;
 };
 
 // Normalises validated mappings once for BOTH stores: lowercases the source
@@ -291,8 +316,8 @@ const saveSsoConfig = async (payload) => {
   } = payload;
 
   validateRequiredFields(payload);
-  await validateJitMappings(jit_enabled, jit_mappings);
-  const normalizedJitMappings = normalizeJitMappings(jit_mappings);
+  const resolvedJitMappings = await resolveJitMappingRoles(jit_enabled, jit_mappings);
+  const normalizedJitMappings = normalizeJitMappings(resolvedJitMappings);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =

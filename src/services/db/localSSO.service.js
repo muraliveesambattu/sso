@@ -295,11 +295,19 @@ const getSsoConfigDetails = async ({ company_id, domain }) => {
     saml = rest;
   }
 
+  // Enrich each mapping with role_name — the console's JIT Role dropdown is
+  // fed by RMS role names (not zdna_roles.role_id), so the edit view needs
+  // the name to pre-select the right option.
+  const jitMappingRows = data.jit_mappings.filter((m) => m.company_id === cid);
+  const roleIds        = [...new Set(jitMappingRows.map((m) => m.role_id).filter(Boolean))];
+  const roles          = await getRolesByIds(roleIds);
+  const roleNameById   = new Map(roles.map((r) => [r.role_id, r.role_name]));
+
   return {
     integration,
     oidc_config:  oidc,
     saml_config:  saml,
-    jit_mappings: data.jit_mappings.filter((m) => m.company_id === cid),
+    jit_mappings: jitMappingRows.map((m) => ({ ...m, role_name: roleNameById.get(m.role_id) || null })),
   };
 };
 

@@ -220,11 +220,15 @@ describe('postgresSSO.service', () => {
       toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert' }),
     });
     mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin' }) }]);
+    mocks.ZdnaRole.findAll.mockResolvedValue([{ toJSON: () => ({ role_id: 'role-admin', role_name: 'Admin' }) }]);
 
     const details = await service.getSsoConfigDetails({ company_id: 'company-1' });
     expect(details.oidc_config.client_secret_set).toBe(true);
     expect(details.oidc_config.client_secret_enc).toBeUndefined();
     expect(details.saml_config.sp_private_key_enc).toBeUndefined();
+    // jit_mappings enriched with role_name so the console's RMS-fed dropdown
+    // can pre-select the right option when a saved config is reopened for edit.
+    expect(details.jit_mappings[0]).toEqual(expect.objectContaining({ role_id: 'role-admin', role_name: 'Admin' }));
 
     mocks.OidcConfiguration.destroy.mockRejectedValueOnce(new Error('delete failed'));
     await expect(service.deleteSsoConfig('company-1')).rejects.toThrow('delete failed');

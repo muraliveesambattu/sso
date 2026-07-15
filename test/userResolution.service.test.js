@@ -64,9 +64,9 @@ describe('userResolution.service', () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-saml', jit_enabled: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'group', mapping_value: 'zdna-saml-admins', role_id: 'role-admin', priority: 1 },
-      { mapping_source: 'default', mapping_value: null, role_id: 'role-viewer', priority: 99 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Administrator' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockResolvedValue({ user_id: 'saml-user-1', email: 'saml.user@example.com' });
 
@@ -89,10 +89,10 @@ describe('userResolution.service', () => {
   test('creates a JIT user on first login and assigns matching group roles', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'default', mapping_value: null, role_id: 'role-viewer', priority: 99 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
       { mapping_source: 'group', mapping_value: 'zdna-admins', role_id: 'role-admin', priority: 1 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Administrator' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockResolvedValue({ user_id: 'user-1', email: 'user@example.com' });
 
@@ -116,7 +116,7 @@ describe('userResolution.service', () => {
     }));
     expect(result).toEqual({
       user: { user_id: 'user-1', email: 'user@example.com' },
-      roles: [{ role_id: 'role-admin', role_name: 'Administrator' }],
+      roles: [{ role_id: 'role-admin', role_name: 'Admin' }],
       action: 'created',
     });
   });
@@ -125,9 +125,9 @@ describe('userResolution.service', () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT',        role_id: 'role-admin',   priority: 1 },
-      { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-analyst', priority: 2 },
+      { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-manager', priority: 2 },
       { mapping_source: 'role',       mapping_value: 'Zdna.Admin', role_id: 'role-admin',  priority: 3 },
-      { mapping_source: 'default',    mapping_value: null,        role_id: 'role-viewer',  priority: 99 },
+      { mapping_source: 'default',    mapping_value: null,        role_id: 'role-temporary',  priority: 99 },
     ]);
     getRolesByIds.mockImplementation(async (ids) =>
       ids.map(id => ({ role_id: id, role_name: id })));
@@ -144,16 +144,16 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-admin', 'role-analyst']);
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-admin', 'role-manager']);
   });
 
   test('falls back to the default mapping when no attribute matches', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin',  priority: 1 },
-      { mapping_source: 'default',    mapping_value: null, role_id: 'role-viewer', priority: 99 },
+      { mapping_source: 'default',    mapping_value: null, role_id: 'role-temporary', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-viewer', role_name: 'Viewer' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-temporary', role_name: 'Temporary' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 
@@ -164,15 +164,15 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-viewer']);
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
   });
 
   test('updates an existing JIT user on re-login', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'default', mapping_value: null, role_id: 'role-analyst', priority: 99 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-analyst', role_name: 'Analyst' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
     findUserByOid.mockResolvedValue({
       user_id: 'user-2',
       display_name: 'Old Name',
@@ -187,7 +187,7 @@ describe('userResolution.service', () => {
     }, 'oidc');
 
     expect(updateUser).toHaveBeenCalledWith('user-2', expect.objectContaining({
-      roles: ['role-analyst'],
+      roles: ['role-manager'],
       display_name: 'New Name',
       last_login: expect.any(String),
     }));
@@ -202,7 +202,7 @@ describe('userResolution.service', () => {
       user_id: 'user-3',
       email: 'user@example.com',
       login_method: 'password',
-      roles: ['role-viewer'],
+      roles: ['role-temporary'],
     });
 
     await expect(resolveUser('company-1', {
@@ -239,9 +239,9 @@ describe('userResolution.service', () => {
       email: 'user@example.com',
       oid: 'oid-4',
       login_method: 'sso',
-      roles: ['role-analyst'],
+      roles: ['role-manager'],
     });
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-analyst', role_name: 'Analyst' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
 
     const result = await resolveUser('company-1', {
       email: 'user@example.com',
@@ -257,9 +257,9 @@ describe('userResolution.service', () => {
         email: 'user@example.com',
         oid: 'oid-4',
         login_method: 'sso',
-        roles: ['role-analyst'],
+        roles: ['role-manager'],
       },
-      roles: [{ role_id: 'role-analyst', role_name: 'Analyst' }],
+      roles: [{ role_id: 'role-manager', role_name: 'Manager' }],
       action: 'login',
     });
   });
@@ -273,9 +273,9 @@ describe('userResolution.service', () => {
       email: 'user5@example.com',
       oid: 'pending:placeholder-uuid',
       login_method: 'sso',
-      roles: ['role-viewer'],
+      roles: ['role-temporary'],
     });
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-viewer', role_name: 'Viewer' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-temporary', role_name: 'Temporary' }]);
 
     await resolveUser('company-1', {
       email: 'user5@example.com',
@@ -292,9 +292,9 @@ describe('userResolution.service', () => {
   test('falls back to preferred_username as display name when name is absent during JIT updates', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-3', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'default', mapping_value: null, role_id: 'role-analyst', priority: 99 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-analyst', role_name: 'Analyst' }]);
+    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
     findUserByOid.mockResolvedValue({
       id: 'user-5',
       display_name: 'Old Display',
@@ -308,7 +308,7 @@ describe('userResolution.service', () => {
 
     expect(updateUser).toHaveBeenCalledWith('user-5', expect.objectContaining({
       display_name: 'preferred@example.com',
-      roles: ['role-analyst'],
+      roles: ['role-manager'],
     }));
   });
 });

@@ -37,8 +37,8 @@ const mockReq = (overrides = {}) => ({
 });
 
 const ROLE_ROWS = [
-  { role_id: 'role-admin',   role_name: 'Administrator', permissions: ['read', 'write', 'delete', 'manage_users'] },
-  { role_id: 'role-analyst', role_name: 'Analyst',       permissions: ['read', 'write'] },
+  { role_id: 'role-admin',   role_name: 'Admin',   permissions: ['my_services:editable', 'users:editable'] },
+  { role_id: 'role-manager', role_name: 'Manager', permissions: ['my_devices:editable', 'licensing:editable'] },
 ];
 
 describe('ssoUsers.controller', () => {
@@ -66,7 +66,7 @@ describe('ssoUsers.controller', () => {
   test('handleGetMe returns fresh roles + permission union from the DB', async () => {
     findUserById.mockResolvedValue({
       user_id: 'user-1', company_id: 'company-1', email: 'a@b.com',
-      display_name: 'A', roles: ['role-admin', 'role-analyst'], last_login: null,
+      display_name: 'A', roles: ['role-admin', 'role-manager'], last_login: null,
     });
     getRolesByIds.mockResolvedValue(ROLE_ROWS);
     const req = mockReq({ user: { uid: 'user-1' } });
@@ -77,7 +77,7 @@ describe('ssoUsers.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     const payload = res.json.mock.calls[0][0];
     expect(payload.data.roles).toEqual(ROLE_ROWS);
-    expect(payload.data.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
+    expect(payload.data.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
   });
 
   test('handleGetMe 404s when the caller has no sso_users record', async () => {
@@ -104,7 +104,7 @@ describe('ssoUsers.controller', () => {
   describe('handleCreateUser', () => {
     const validBody = {
       company_id: 'company-1', email: 'new@b.com',
-      roles: ['role-analyst'], display_name: 'New User',
+      roles: ['role-manager'], display_name: 'New User',
     };
 
     test('creates a pre-provisioned user with a pending oid placeholder', async () => {
@@ -120,7 +120,7 @@ describe('ssoUsers.controller', () => {
       expect(createUser).toHaveBeenCalledWith(expect.objectContaining({
         company_id: 'company-1',
         email: 'new@b.com',
-        roles: ['role-analyst'],
+        roles: ['role-manager'],
         oid: 'pending:uuid-123',
         login_method: 'sso',
         jit_provisioned: false,
@@ -168,7 +168,7 @@ describe('ssoUsers.controller', () => {
 
   describe('handleUpdateUser / handleDeleteUser', () => {
     test('update validates roles and persists them', async () => {
-      findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-analyst'] });
+      findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-manager'] });
       getRolesByIds.mockResolvedValue([ROLE_ROWS[0]]);
       const res = mockRes();
 

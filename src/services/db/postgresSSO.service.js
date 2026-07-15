@@ -343,11 +343,19 @@ const getSsoConfigDetails = async ({ company_id, domain, owner_tenant_id }) => {
   const saml = samlRow ? samlRow.toJSON() : null;
   if (saml) delete saml.sp_private_key_enc;
 
+  // Enrich each mapping with role_name — the console's JIT Role dropdown is
+  // fed by RMS role names (not zdna_roles.role_id), so the edit view needs
+  // the name to pre-select the right option.
+  const jitMappingRows = jitRows.map(r => r.toJSON());
+  const roleIds       = [...new Set(jitMappingRows.map(m => m.role_id).filter(Boolean))];
+  const roles         = await getRolesByIds(roleIds);
+  const roleNameById  = new Map(roles.map(r => [r.role_id, r.role_name]));
+
   return {
     integration:  intData,
     oidc_config:  oidc,
     saml_config:  saml,
-    jit_mappings: jitRows.map(r => r.toJSON()),
+    jit_mappings: jitMappingRows.map(m => ({ ...m, role_name: roleNameById.get(m.role_id) || null })),
   };
 };
 

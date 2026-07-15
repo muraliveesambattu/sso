@@ -79,20 +79,20 @@ describe('sso.routes', () => {
     expect(routerMock.post).toHaveBeenCalledWith('/admin/flags', requireAdminKey, updateFlag);
 
     // RBAC endpoints
-    expect(routerMock.get).toHaveBeenCalledWith('/sso/roles', permissionSentinels.read, handleListRoles);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/roles', permissionSentinels['my_services:view'], handleListRoles);
     expect(routerMock.get).toHaveBeenCalledWith('/sso/me', requireUser, handleGetMe);
-    expect(routerMock.get).toHaveBeenCalledWith('/sso/users', permissionSentinels.manage_users, handleListUsers);
-    expect(routerMock.post).toHaveBeenCalledWith('/sso/users', permissionSentinels.manage_users, handleCreateUser);
-    expect(routerMock.patch).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels.manage_users, handleUpdateUser);
-    expect(routerMock.delete).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels.manage_users, handleDeleteUser);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/users', permissionSentinels['users:editable'], handleListUsers);
+    expect(routerMock.post).toHaveBeenCalledWith('/sso/users', permissionSentinels['users:editable'], handleCreateUser);
+    expect(routerMock.patch).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels['users:editable'], handleUpdateUser);
+    expect(routerMock.delete).toHaveBeenCalledWith('/sso/users/:user_id', permissionSentinels['users:editable'], handleDeleteUser);
 
     // Config endpoints: admin key OR the named zdna_roles permission
-    expect(routerMock.post).toHaveBeenCalledWith('/test-connection', permissionSentinels.write, handleTestConnection);
+    expect(routerMock.post).toHaveBeenCalledWith('/test-connection', permissionSentinels['my_services:editable'], handleTestConnection);
     expect(routerMock.post).toHaveBeenCalledWith('/test-connection/oidc/callback', oidcTestCallbackController);
-    expect(routerMock.post).toHaveBeenCalledWith('/sso/save', permissionSentinels.write, handleSaveSsoConfig);
-    expect(routerMock.get).toHaveBeenCalledWith('/sso/config', permissionSentinels.read, handleGetSsoConfig);
-    expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', permissionSentinels.write, handleSetSsoStatus);
-    expect(routerMock.delete).toHaveBeenCalledWith('/sso/config/:company_id', permissionSentinels.delete, handleDeleteSsoConfig);
+    expect(routerMock.post).toHaveBeenCalledWith('/sso/save', permissionSentinels['my_services:editable'], handleSaveSsoConfig);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/config', permissionSentinels['my_services:view'], handleGetSsoConfig);
+    expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', permissionSentinels['my_services:editable'], handleSetSsoStatus);
+    expect(routerMock.delete).toHaveBeenCalledWith('/sso/config/:company_id', permissionSentinels['my_services:editable'], handleDeleteSsoConfig);
 
     // Login-flow endpoints unchanged
     expect(routerMock.post).toHaveBeenCalledWith('/domain-check', domainCheckLimiter, domainCheck);

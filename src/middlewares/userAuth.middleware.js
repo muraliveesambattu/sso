@@ -37,6 +37,21 @@ const toPermissionArray = (value) => {
   return [];
 };
 
+// Console permission strings are 'feature:level', mirroring the zDNA Cloud
+// role matrix (levels: editable | view_only | view_with_remote_control;
+// "No Access" = the feature is absent from the array). A ':view' requirement
+// is satisfied by any level that grants visibility; every other requirement
+// must match exactly.
+const VIEWING_LEVELS = ['editable', 'view_only', 'view_with_remote_control'];
+
+const hasPermission = (permissions, required) => {
+  const [feature, level] = required.split(':');
+  if (level === 'view') {
+    return VIEWING_LEVELS.some((l) => permissions.includes(`${feature}:${l}`));
+  }
+  return permissions.includes(required);
+};
+
 // Lazy require — pulls in the data layer (and possibly Sequelize) only when a
 // Bearer-authenticated request actually arrives.
 const dataService = () => require('../services/db/ssoDataService');
@@ -92,7 +107,7 @@ const requireAdminKeyOrPermission = (permission) => async (req, res, next) => {
     const identity = await authenticateBearer(req);
     const user = await loadUserAccess(identity);
 
-    if (!user.permissions.includes(permission)) {
+    if (!hasPermission(user.permissions, permission)) {
       logger.warn('Permission denied', {
         action: 'user_auth_forbidden', uid: user.uid, required: permission, path: req.path,
       });
@@ -128,4 +143,4 @@ const requireUser = async (req, res, next) => {
   }
 };
 
-module.exports = { requireAdminKeyOrPermission, requireUser, toPermissionArray };
+module.exports = { requireAdminKeyOrPermission, requireUser, toPermissionArray, hasPermission };

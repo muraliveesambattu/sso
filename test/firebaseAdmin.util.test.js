@@ -46,7 +46,7 @@ describe('firebaseAdmin.util', () => {
 
     const token = await generateCustomToken('user-1', {
       email: 'user@example.com',
-      role: 'Administrator',
+      role: 'Admin',
       companyId: 'company-1',
       displayName: 'User One',
     });
@@ -67,11 +67,11 @@ describe('firebaseAdmin.util', () => {
 
     const token = await generateCustomToken('user-2', {
       email: 'user2@example.com',
-      role: 'Analyst',
+      role: 'Manager',
       roles: [
-        { role_id: 'role-analyst', role_name: 'Analyst', permissions: ['read', 'write'] },
+        { role_id: 'role-manager', role_name: 'Manager', permissions: ['my_devices:editable', 'licensing:editable'] },
         // JSON-store rows may carry permissions as a string — must be parsed
-        { role_id: 'role-viewer', role_name: 'Viewer', permissions: '["read"]' },
+        { role_id: 'role-temporary', role_name: 'Temporary', permissions: '["licensing:editable"]' },
       ],
       companyId: 'company-2',
       displayName: 'User Two',
@@ -90,17 +90,17 @@ describe('firebaseAdmin.util', () => {
     });
     expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-2', {
       email: 'user2@example.com',
-      role: 'Analyst',
+      role: 'Manager',
       tenantId: 'user-2',
       identity: 'user-2',
       loginType: 'entra',
       companyId: 'company-2',
       displayName: 'User Two',
       zdnaRoles: [
-        { id: 'role-analyst', name: 'Analyst' },
-        { id: 'role-viewer', name: 'Viewer' },
+        { id: 'role-manager', name: 'Manager' },
+        { id: 'role-temporary', name: 'Temporary' },
       ],
-      zdnaPermissions: ['read', 'write'],
+      zdnaPermissions: ['my_devices:editable', 'licensing:editable'],
     });
     expect(token).toBe('firebase-token');
   });
@@ -116,8 +116,8 @@ describe('firebaseAdmin.util', () => {
 
     await generateCustomToken('user-5', {
       email: 'user5@example.com',
-      role: 'Analyst',
-      roles: [{ role_id: 'role-analyst', role_name: 'Analyst', permissions: ['read', 'write'] }],
+      role: 'Manager',
+      roles: [{ role_id: 'role-manager', role_name: 'Manager', permissions: ['my_devices:editable'] }],
       permissions: ['console:dashboard'],   // from permissionResolver (role-mgmt service)
       companyId: 'company-5',
       displayName: 'User Five',
@@ -140,7 +140,7 @@ describe('firebaseAdmin.util', () => {
     const hugePermissions = Array.from({ length: 60 }, (_, i) => `console:feature:${i}:noaccess`);
     await generateCustomToken('user-6', {
       email: 'user6@example.com',
-      role: 'Analyst',
+      role: 'Manager',
       roles: [],
       permissions: hugePermissions,
       companyId: 'company-6',
@@ -160,7 +160,7 @@ describe('firebaseAdmin.util', () => {
 
     await generateCustomToken('user-3', {
       email: 'user3@example.com',
-      role: 'Viewer',
+      role: 'Temporary',
       companyId: 'company-3',
       displayName: 'User Three',
     });
@@ -183,7 +183,7 @@ describe('firebaseAdmin.util', () => {
 
     await expect(generateCustomToken('user-4', {
       email: 'user4@example.com',
-      role: 'Viewer',
+      role: 'Temporary',
       companyId: 'company-4',
       displayName: 'User Four',
     })).rejects.toMatchObject({

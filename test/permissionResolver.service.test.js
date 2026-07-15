@@ -7,8 +7,8 @@ const { __resetRmsTokenCache } = require('../src/services/SSO/rmsClient.service'
 const { logger } = require('../src/config/logger');
 
 const ROLES = [
-  { role_id: 'role-admin',   role_name: 'Administrator', permissions: ['read', 'write', 'delete', 'manage_users'] },
-  { role_id: 'role-analyst', role_name: 'Analyst',       permissions: '["read","write"]' }, // JSON-store string shape
+  { role_id: 'role-admin',   role_name: 'Admin',   permissions: ['my_services:editable', 'users:editable'] },
+  { role_id: 'role-manager', role_name: 'Manager', permissions: '["my_devices:editable","licensing:editable"]' }, // JSON-store string shape
 ];
 
 const USER = { user_id: 'uuid-1', email: 'user@example.com', oid: 'oid-123' };
@@ -56,7 +56,7 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     const result = await resolvePermissions(ROLES, USER);
 
     expect(result.source).toBe('zdna_roles');
-    expect(result.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
+    expect(result.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -119,7 +119,7 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     const result = await resolvePermissions(ROLES, USER);
 
     expect(result.source).toBe('zdna_roles');
-    expect(result.permissions.sort()).toEqual(['delete', 'manage_users', 'read', 'write']);
+    expect(result.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
   });
 
   test('falls back to zdna_roles on any RMS failure (login must not block)', async () => {
