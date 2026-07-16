@@ -17,6 +17,11 @@ const { logger }     = require('../config/logger');
 
 // GET /sso/config?company_id=xxx  or  /sso/config?domain=zebra.com
 const handleGetSsoConfig = async (req, res, next) => {
+  // Personalised, frequently-changing config — never let a CDN/browser cache
+  // this (Firebase Hosting's default caching otherwise applies its own
+  // max-age when the origin doesn't set anything, which can serve a stale
+  // 404/old config for minutes after a fix or a fresh save).
+  res.set('Cache-Control', 'no-store');
   try {
     let { company_id, domain, owner_tenant_id } = req.query;
 

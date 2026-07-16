@@ -16,6 +16,7 @@ const mockRes = () => {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
   res.json = jest.fn().mockReturnValue(res);
+  res.set = jest.fn().mockReturnValue(res);
   return res;
 };
 
@@ -31,6 +32,17 @@ describe('ssoAdmin.controller', () => {
     await handleGetSsoConfig(req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('never lets a CDN/browser cache this personalised config response', async () => {
+    // Firebase Hosting applies its own default max-age when the origin sets
+    // nothing, which can serve a stale 404/old config for minutes after a fix.
+    const res = mockRes();
+    ssoDataService.getSsoConfigDetails.mockResolvedValueOnce({ integration: { company_id: 'company-1' } });
+
+    await handleGetSsoConfig({ query: { company_id: 'company-1' } }, res, jest.fn());
+
+    expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
   });
 
   test('returns 404 when no config is found and 200 when config exists', async () => {
