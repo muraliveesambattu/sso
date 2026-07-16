@@ -39,6 +39,7 @@ const SAFE_MESSAGES = {
   SAML_LOGIN_FAILED:        'SAML authentication failed. Please try again.',
   MISSING_SESSION:          'Session unavailable. Please try again.',
   DOMAIN_ALREADY_EXISTS:    'This domain is already configured by another organisation.',
+  TENANT_ALREADY_REGISTERED: 'This Microsoft Entra tenant ID is already registered by another organisation.',
   INVALID_ROLE_ID:          'One or more selected roles do not exist. Please refresh and try again.',
   MISSING_ROLES:            'At least one role is required.',
   INVALID_MAPPING_SOURCE:   'Unsupported mapping type. Use group, department, jobtitle, role, or default.',

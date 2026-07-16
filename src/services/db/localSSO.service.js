@@ -87,6 +87,13 @@ const getSsoIntegrationByCompanyId = async (companyId) => {
   return data.sso_integrations.find((r) => r.company_id === companyId) || null;
 };
 
+// One Entra tenant should not be claimed by two different organisations —
+// used at save time to reject a tenant_id already registered elsewhere.
+const getSsoIntegrationByEntraTenantId = async (entraTenantId) => {
+  logger.debug(`[LOCAL] Query sso_integrations | entra_tenant_id: ${entraTenantId}`);
+  return data.sso_integrations.find((r) => r.entra_tenant_id === entraTenantId) || null;
+};
+
 // ── oidc_configurations ───────────────────────────────────────────────────────
 
 /**
@@ -365,6 +372,7 @@ module.exports = {
   // SSO integrations
   getSsoIntegrationByDomain,
   getSsoIntegrationByCompanyId,
+  getSsoIntegrationByEntraTenantId,
   // OIDC
   getOidcConfig,
   // SAML

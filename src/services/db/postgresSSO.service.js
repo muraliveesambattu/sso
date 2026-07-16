@@ -44,6 +44,14 @@ const getSsoIntegrationByDomain = async (domain) => {
   return row ? row.toJSON() : null;
 };
 
+// One Entra tenant should not be claimed by two different organisations —
+// used at save time to reject a tenant_id already registered elsewhere.
+const getSsoIntegrationByEntraTenantId = async (entraTenantId) => {
+  logger.debug(`[POSTGRES] Query sso_integrations | entra_tenant_id: ${entraTenantId}`);
+  const row = await SsoIntegration.findOne({ where: { entra_tenant_id: entraTenantId } });
+  return row ? row.toJSON() : null;
+};
+
 const getSsoIntegrationByCompanyId = async (companyId) => {
   logger.debug(`[POSTGRES] Query sso_integrations | company_id: ${companyId}`);
   const row = await SsoIntegration.findOne({ where: { company_id: companyId } });
@@ -399,6 +407,7 @@ const invalidateDomainCache = (domain) => {
 module.exports = {
   getSsoIntegrationByDomain,
   getSsoIntegrationByCompanyId,
+  getSsoIntegrationByEntraTenantId,
   getOidcConfig,
   getSamlConfig,
   getSamlConfigByAcsUrl,

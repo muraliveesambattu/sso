@@ -109,14 +109,23 @@ describe('saveSsoConfig.service', () => {
     ]);
   });
 
-  test('rejects unsupported mapping_source values and missing mapping_value (the "Deaprtment" bug)', async () => {
-    const { saveSsoConfig } = loadService();
+  test('accepts an arbitrary Entra claim name as mapping_source (matched at login against the raw token)', async () => {
+    const { saveSsoConfig, writeFile } = loadService();
 
-    await expect(saveSsoConfig({
-      protocol: 'oidc', domains: 'example.com', tenant_id: 'common',
+    await saveSsoConfig({
+      protocol: 'oidc', domains: 'custom-claim.com', tenant_id: 'common',
       jit_enabled: true,
-      jit_mappings: [{ mapping_source: 'Deaprtment', mapping_value: 'it', zdna_role: 'role-admin' }],
-    })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_MAPPING_SOURCE' });
+      jit_mappings: [{ mapping_source: 'employeeType', mapping_value: 'Contractor', zdna_role: 'role-admin' }],
+    });
+
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.jit_mappings[0]).toEqual(expect.objectContaining({
+      mapping_source: 'employeetype', mapping_value: 'Contractor', role_id: 'role-admin',
+    }));
+  });
+
+  test('rejects a missing mapping_value regardless of mapping_source', async () => {
+    const { saveSsoConfig } = loadService();
 
     await expect(saveSsoConfig({
       protocol: 'oidc', domains: 'example.com', tenant_id: 'common',

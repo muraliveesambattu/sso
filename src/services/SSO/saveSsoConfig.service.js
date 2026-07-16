@@ -53,12 +53,14 @@ const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   }
 };
 
-// Mapping sources the resolution engine actually implements — anything else
-// would save fine and then silently never match at login.
-const VALID_MAPPING_SOURCES = ['group', 'department', 'jobtitle', 'role', 'default'];
-
+// mapping_source may be any Entra claim/attribute name — 'group', 'department',
+// 'jobtitle', and 'role' get built-in normalisation and (for OIDC) Graph
+// enrichment, but any other non-empty string is accepted too and matched
+// directly against the raw token/assertion at login time (see
+// matchesMapping's default case in userResolution.service.js). 'default' is
+// reserved as the fallback-only keyword.
+//
 // Validates jit_mappings at save time:
-//   - mapping_source must be one the login engine implements
 //   - non-default mappings need a mapping_value to match against
 // zdna_role is NOT validated against zdna_roles — RMS role names are defined
 // per-tenant (each company manages its own custom roles) and are not
@@ -73,12 +75,6 @@ const validateJitMappings = (jit_enabled, jit_mappings) => {
   for (const m of jit_mappings) {
     if (!m.zdna_role || !m.mapping_source) continue; // dropped by the row builders anyway
     const source = String(m.mapping_source).trim().toLowerCase();
-    if (!VALID_MAPPING_SOURCES.includes(source)) {
-      throw fieldError(
-        `mapping_source must be one of: ${VALID_MAPPING_SOURCES.join(', ')} — got '${m.mapping_source}'`,
-        'INVALID_MAPPING_SOURCE'
-      );
-    }
     if (source !== 'default' && !m.mapping_value) {
       throw fieldError(`mapping_value is required for '${source}' mappings`, 'MISSING_MAPPING_VALUE');
     }

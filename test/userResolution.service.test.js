@@ -18,6 +18,7 @@ jest.mock('../src/services/db/ssoDataService', () => ({
 
 const crypto = require('crypto');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
+const { logger } = require('../src/config/logger');
 const { isEnabled } = require('../src/services/featureFlag.service');
 const {
   getSsoIntegrationByCompanyId,
@@ -145,6 +146,52 @@ describe('userResolution.service', () => {
     }, 'oidc');
 
     expect(getRolesByIds).toHaveBeenCalledWith(['role-admin', 'role-manager']);
+  });
+
+  test('matches an arbitrary Entra claim name against the raw token/assertion', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'employeetype', mapping_value: 'contractor', role_id: 'role-temporary', priority: 1 },
+    ]);
+    getRolesByIds.mockImplementation(async (ids) =>
+      ids.map(id => ({ role_id: id, role_name: id })));
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    await resolveUser('company-1', {
+      email: 'contractor@example.com',
+      oid: 'oid-contractor',
+      groups: [],
+      employeeType: 'Contractor', // custom Entra claim, not one of the 4 named fields
+    }, 'oidc');
+
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test('logs a warning (and does not match) when a custom claim name is absent from the token', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'costCenter', mapping_value: 'CC-100', role_id: 'role-admin', priority: 1 },
+      { mapping_source: 'default',    mapping_value: null,    role_id: 'role-temporary', priority: 99 },
+    ]);
+    getRolesByIds.mockImplementation(async (ids) =>
+      ids.map(id => ({ role_id: id, role_name: id })));
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-nocc',
+      groups: [],
+      // no costCenter claim present at all — likely a typo'd/misconfigured claim name
+    }, 'oidc');
+
+    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']); // falls back to default
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('not present in the token'),
+      expect.objectContaining({ action: 'jit_unknown_claim', mapping_source: 'costCenter' })
+    );
   });
 
   test('falls back to the default mapping when no attribute matches', async () => {

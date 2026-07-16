@@ -48,6 +48,9 @@ const extractIdentity = (claims, protocol) => {
       department: a.department || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department'] || null,
       jobTitle:   a.jobtitle || a.jobTitle || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
       appRoles:   toGroupArray(a.role || a.roles),
+      // Full attribute bag — lets JIT mappings match on ANY Entra claim name,
+      // not just the 4 named ones above (see matchesMapping's default case).
+      raw: a,
     };
   }
 
@@ -61,6 +64,10 @@ const extractIdentity = (claims, protocol) => {
     department: claims.department || null,
     jobTitle:   claims.jobTitle || claims.jobtitle || null,
     appRoles:   Array.isArray(claims.roles) ? claims.roles : [],
+    // Full claims bag (id_token + any Graph enrichment already merged in by
+    // the caller) — lets JIT mappings match on ANY claim name, not just the
+    // 4 named ones above.
+    raw: claims,
   };
 };
 
@@ -70,12 +77,17 @@ const extractIdentity = (claims, protocol) => {
  * Maps the user's Entra attributes to internal role_ids using jit_mappings.
  * Runs on EVERY login to keep roles in sync.
  *
- * Supported mapping sources (checked in priority order, lower = higher):
+ * Named mapping sources (checked in priority order, lower = higher):
  *   'group'      → mapping_value matched against Entra group IDs (exact)
  *   'department' → matched against the user's department (case-insensitive)
  *   'jobtitle'   → matched against the user's job title (case-insensitive)
  *   'role'       → matched against Entra APP roles claim (case-insensitive)
  *   'default'    → fallback when nothing above matched
+ * Anything else is treated as a raw Entra claim/attribute name and looked up
+ * directly against the token/assertion (identity.raw) — this is what lets an
+ * admin key JIT off any claim they've configured in Entra, not just the 4
+ * named ones above (which exist because they're the common case and get
+ * normalisation + Graph enrichment for OIDC).
  *
  * Semantics: ALL matching mappings accumulate (a user in two mapped groups
  * gets both roles); 'default' applies only when no other source matched.
@@ -93,8 +105,27 @@ const matchesMapping = (mapping, identity) => {
       return !!identity.jobTitle && norm(identity.jobTitle) === norm(mapping.mapping_value);
     case 'role':
       return identity.appRoles.some(r => norm(r) === norm(mapping.mapping_value));
-    default:
+    case 'default':
       return false; // 'default' is handled as the fallback pass
+    default: {
+      // Claim keys as Entra actually sends them are case-sensitive (e.g.
+      // 'employeeType'), but mapping_source is normalised to lowercase at
+      // save time — so the lookup itself must be case-insensitive.
+      const rawKeys   = identity.raw ? Object.keys(identity.raw) : [];
+      const matchedKey = rawKeys.find(k => norm(k) === norm(mapping.mapping_source));
+      const raw = matchedKey !== undefined ? identity.raw[matchedKey] : undefined;
+      if (raw === undefined || raw === null) {
+        // The claim name itself isn't present in this token/assertion at
+        // all — most likely a typo'd or misconfigured claim name, since a
+        // legitimate value mismatch would still have the key present.
+        logger.warn('JIT mapping references a claim not present in the token — check the claim name spelling', {
+          action: 'jit_unknown_claim', mapping_source: mapping.mapping_source,
+        });
+        return false;
+      }
+      const rawValues = Array.isArray(raw) ? raw : [raw];
+      return rawValues.some(v => norm(v) === norm(mapping.mapping_value));
+    }
   }
 };
 

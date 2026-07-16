@@ -1,6 +1,7 @@
 const { saveSsoConfig }      = require('../services/SSO/saveSsoConfig.service');
 const { logger }             = require('../config/logger');
 const { auditSsoConfigSaved } = require('../services/audit/audit.service');
+const { getSsoIntegrationByEntraTenantId } = require('../services/db/ssoDataService');
 
 // Trim identifier fields so stray copy-paste whitespace can't corrupt the
 // stored tenant_id / client_id / domain (which break issuer/audience checks
@@ -27,6 +28,23 @@ const handleSaveSsoConfig = async (req, res, next) => {
     const acs_url      = trimStr(req.body.acs_url);      // SAML — assertion consumer service URL
     const owner_tenant_id    = trimStr(req.body.owner_tenant_id);     // admin who configured this SSO
     const owner_company_name = trimStr(req.body.owner_company_name);  // their company name
+
+    // An Entra tenant may only be claimed by one organisation — reject if a
+    // DIFFERENT org already registered it. The same org re-saving/editing its
+    // own config with the same tenant_id is not a conflict. Compared against
+    // `domains` rather than owner_tenant_id/company_id: not every save path
+    // includes owner identity fields (e.g. the JIT-mappings-only quick save
+    // from "Manage roles" omits them entirely), but the verified domain is
+    // always present and is itself the org's unique identity.
+    if (tenant_id) {
+      const existingTenant = await getSsoIntegrationByEntraTenantId(tenant_id);
+      if (existingTenant && existingTenant.domains !== domains) {
+        throw Object.assign(
+          new Error('This Microsoft Entra tenant ID is already registered by another organization.'),
+          { statusCode: 409, code: 'TENANT_ALREADY_REGISTERED' }
+        );
+      }
+    }
 
     logger.info('Save SSO config request', { action: 'sso_save', protocol, domains, jit_enabled, ip: req.ip });
 
