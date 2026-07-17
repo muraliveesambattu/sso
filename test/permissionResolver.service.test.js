@@ -2,8 +2,13 @@ jest.mock('../src/config/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
+jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
+  getRolePermissionStrings: jest.fn(async () => []),
+}));
+
 const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 const { __resetRmsTokenCache } = require('../src/services/SSO/rmsClient.service');
+const { getRolePermissionStrings } = require('../src/utils/firebase/firebaseAdmin.util');
 const { logger } = require('../src/config/logger');
 
 const ROLES = [
@@ -112,14 +117,54 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     expect(tokenCalls).toHaveLength(1);
   });
 
-  test('falls back to zdna_roles when RMS does not know the user', async () => {
+  test('falls back to zdna_roles when RMS does not know the user (no company_id to derive role config)', async () => {
     configureRms();
     fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
 
-    const result = await resolvePermissions(ROLES, USER);
+    const result = await resolvePermissions(ROLES, USER); // USER has no company_id
 
     expect(result.source).toBe('zdna_roles');
     expect(result.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
+    expect(getRolePermissionStrings).not.toHaveBeenCalled();
+  });
+
+  test('derives permissions from the assigned role config when RMS does not know the user', async () => {
+    configureRms();
+    fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
+    const rolePerms = [
+      { permissionString: 'zdna.all' },
+      { permissionString: 'zdna.myServices.noaccess' },
+      { permissionString: 'zdna.userManagement.noaccess' },
+      { permissionString: 'zdna.myDevice.edit' },
+    ];
+    getRolePermissionStrings.mockResolvedValueOnce(rolePerms);
+
+    const result = await resolvePermissions(ROLES, { ...USER, company_id: 'company-1' });
+
+    // roleRows[0].role_name = 'Admin' → looked up in that tenant's roleConfig
+    expect(getRolePermissionStrings).toHaveBeenCalledWith('company-1', 'Admin');
+    expect(result).toEqual({ permissions: rolePerms, source: 'role_config', roleName: 'Admin' });
+  });
+
+  test('falls through to zdna_roles when the assigned role has no Firestore config', async () => {
+    configureRms();
+    fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
+    getRolePermissionStrings.mockResolvedValueOnce([]); // no roleConfig doc
+
+    const result = await resolvePermissions(ROLES, { ...USER, company_id: 'company-1' });
+
+    expect(getRolePermissionStrings).toHaveBeenCalledWith('company-1', 'Admin');
+    expect(result.source).toBe('zdna_roles');
+  });
+
+  test('role config also backstops when RMS is unconfigured (not just not-found)', async () => {
+    // no configureRms() → isRmsConfigured() false → first branch
+    getRolePermissionStrings.mockResolvedValueOnce([{ permissionString: 'zdna.myServices.noaccess' }]);
+
+    const result = await resolvePermissions(ROLES, { ...USER, company_id: 'company-1' });
+
+    expect(result.source).toBe('role_config');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   test('falls back to zdna_roles on any RMS failure (login must not block)', async () => {

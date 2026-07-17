@@ -44,12 +44,34 @@ const localPermissions = (roles) =>
  *        the resolved SSO user — required for the RMS (user-centric) source
  * @returns {Promise<{permissions: string[], source: 'rms'|'zdna_roles', roleName?: string}>}
  */
+// Fallback when RMS can't supply per-user permissions (unconfigured, doesn't
+// know the user, or errored): derive permissions from the user's JIT-assigned
+// role's own definition in the tenant's Firestore roleConfig. This is the
+// correct model for SSO/JIT users — permissions follow the assigned ROLE
+// (Entra app-role → ZDNA role), so they don't need to be individually
+// provisioned in RMS. Falls through to the local zdna_roles union only when the
+// role has no Firestore config either.
+const roleConfigFallback = async (roleRows, user, local) => {
+  const roleName  = roleRows?.[0]?.role_name;
+  const companyId = user?.company_id;
+  if (roleName && companyId) {
+    // Lazy require — avoids initialising the Admin SDK on module load (tests,
+    // JSON-store mode).
+    const { getRolePermissionStrings } = require('../../utils/firebase/firebaseAdmin.util');
+    const rolePerms = await getRolePermissionStrings(companyId, roleName);
+    if (rolePerms.length) {
+      return { permissions: rolePerms, source: 'role_config', roleName };
+    }
+  }
+  return { permissions: local, source: 'zdna_roles' };
+};
+
 const resolvePermissions = async (roles, user = null) => {
   const roleRows = Array.isArray(roles) ? roles : [];
   const local    = localPermissions(roleRows);
 
   if (!isRmsConfigured() || !user?.email) {
-    return { permissions: local, source: 'zdna_roles' };
+    return roleConfigFallback(roleRows, user, local);
   }
 
   try {
@@ -62,14 +84,13 @@ const resolvePermissions = async (roles, user = null) => {
     if (rms.found) {
       return { permissions: rms.permissions, source: 'rms', roleName: rms.roleName };
     }
-    // RMS reachable but doesn't know the user (not provisioned there yet —
-    // auto-creating SSO users in RMS is a pending team decision)
-    return { permissions: local, source: 'zdna_roles' };
+    // RMS reachable but doesn't know the user — use the assigned role's config.
+    return roleConfigFallback(roleRows, user, local);
   } catch (err) {
-    logger.warn('RMS permission fetch failed — falling back to zdna_roles', {
+    logger.warn('RMS permission fetch failed — falling back to role config', {
       action: 'rms_fallback', error: err.message,
     });
-    return { permissions: local, source: 'zdna_roles' };
+    return roleConfigFallback(roleRows, user, local);
   }
 };
 

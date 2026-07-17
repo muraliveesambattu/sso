@@ -39,8 +39,8 @@ const loadFirebaseUtil = ({
     credential: { cert },
   }));
 
-  const { generateCustomToken } = require('../src/utils/firebase/firebaseAdmin.util');
-  return { generateCustomToken, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, firestorePath } };
+  const { generateCustomToken, transformRolePermissions } = require('../src/utils/firebase/firebaseAdmin.util');
+  return { generateCustomToken, transformRolePermissions, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, firestorePath } };
 };
 
 describe('firebaseAdmin.util', () => {
@@ -50,6 +50,28 @@ describe('firebaseAdmin.util', () => {
     jest.clearAllMocks();
     jest.resetModules();
     process.env = { ...originalEnv };
+  });
+
+  test('transformRolePermissions maps a role config matrix to enforcement permissionStrings', () => {
+    const { transformRolePermissions } = loadFirebaseUtil();
+
+    const managerMatrix = {
+      'My Services': 'No Access',
+      'Users': 'No Access',
+      'My Devices': 'Editable',
+      'Licensing': 'View Only',
+      'Unknown Feature': 'Editable',   // unmapped → dropped
+    };
+
+    expect(transformRolePermissions(managerMatrix)).toEqual([
+      { permissionString: 'zdna.all' },
+      { permissionString: 'zdna.myServices.noaccess' },
+      { permissionString: 'zdna.userManagement.noaccess' },
+      { permissionString: 'zdna.myDevice.edit' },
+      { permissionString: 'zdna.licensing.view' },
+    ]);
+    // Always includes the base grant; unmapped features are excluded
+    expect(transformRolePermissions({}).map(p => p.permissionString)).toEqual(['zdna.all']);
   });
 
   test('returns a mock token in local dev mode when Firebase is not configured', async () => {

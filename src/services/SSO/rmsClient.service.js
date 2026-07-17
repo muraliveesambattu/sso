@@ -91,7 +91,13 @@ const fetchUserPermissionsFromRms = async ({ email, userKey }) => {
     },
     body: JSON.stringify({ email }),
   });
-  if (!res.ok) throw new Error(`RMS /user responded HTTP ${res.status}`);
+  if (!res.ok) {
+    // Capture RMS's error body — the status alone doesn't say WHY it failed
+    // (wrong zuid, unknown user, bad Origin, …). res is a raw fetch Response.
+    const bodyText = await res.text().catch(() => '<unreadable>');
+    logger.warn(`RMS /user HTTP ${res.status} body >> ${bodyText}`, { action: 'rms_user_http_error', status: res.status });
+    throw new Error(`RMS /user responded HTTP ${res.status}`);
+  }
   const payload = await res.json();
 
   // Contract from zdna-functions getUserDetailsMS: 3004 ⇔ user present

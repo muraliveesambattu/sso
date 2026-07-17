@@ -103,6 +103,74 @@ const writeUserPermissions = async (companyId, uId, permissions) => {
   }
 };
 
+// Canonical role-config translation, mirroring zdna-functions
+// transformPermissions. A role's Firestore config stores per-feature access
+// levels ({'My Services':'No Access', ...}); the console enforces on
+// permissionString entries. This converts one into the other so SSO users can
+// inherit their JIT-assigned role's permissions WITHOUT a per-user RMS mapping.
+const FEATURE_PREFIX = {
+  'My Devices': 'zdna.myDevice',
+  'New Device Setup': 'zdna.initialSetupNew',
+  'Design Studio': 'zdna.designStudio',
+  'Users': 'zdna.userManagement',
+  'Device Settings': 'zdna.deviceSettings',
+  'Licensing': 'zdna.licensing',
+  'Android Updates': 'zdna.androidUpdates',
+  'Device Users': 'zdna.deviceUsers',
+  'My Apps': 'zdna.myApps',
+  'Roles': 'zdna.roleManagement',
+  'My Services': 'zdna.myServices',
+  'My Profile': 'zdna.userProfile',
+  'Remote Rxlogger': 'zdna.remoteRxLogger',
+  'Profile Dependency': 'zdna.profileDependency',
+};
+const LEVEL_ACTION = {
+  'Editable': 'edit',
+  'View Only': 'view',
+  'No Access': 'noaccess',
+  'View With Remote Control': 'remotesupport.edit',
+};
+
+// permObj: { 'My Services': 'No Access', ... } → [{permissionString: 'zdna.all'}, {permissionString: 'zdna.myServices.noaccess'}, ...]
+// Enforcement only reads permissionString (not permissionId), so we omit ids.
+const transformRolePermissions = (permObj = {}) => ([
+  { permissionString: 'zdna.all' },
+  ...Object.entries(permObj)
+    .filter(([feature, level]) => FEATURE_PREFIX[feature] && LEVEL_ACTION[level])
+    .map(([feature, level]) => ({ permissionString: `${FEATURE_PREFIX[feature]}.${LEVEL_ACTION[level]}` })),
+]);
+
+/**
+ * Reads a role's permission matrix from the tenant's Firestore roleConfig and
+ * returns it in the permissionString format the console enforces on. Lets an
+ * SSO user inherit their JIT-assigned role's permissions with NO per-user RMS
+ * mapping. Best-effort: returns [] on any failure.
+ *
+ * @param {string} companyId  tenant id (Firestore `tenants` doc)
+ * @param {string} roleName   the assigned role's display name (e.g. "Manager")
+ * @returns {Promise<Array<{permissionString:string}>>}
+ */
+const getRolePermissionStrings = async (companyId, roleName) => {
+  if ((!FIREBASE_CONFIGURED && !RUNNING_IN_FIREBASE) || !companyId || !roleName) return [];
+  try {
+    const snap = await admin.firestore()
+      .collection('tenants').doc(String(companyId))
+      .collection('tenantConfig').doc('roleConfig')
+      .collection('roleConfig')
+      .where('roleName', '==', roleName).limit(1).get();
+    if (snap.empty) {
+      logger.info(`[FIREBASE] No roleConfig doc for role "${roleName}" | tenant: ${companyId}`);
+      return [];
+    }
+    const perms = transformRolePermissions(snap.docs[0].data()?.permissions || {});
+    logger.info(`[FIREBASE] Derived ${perms.length} permissions from roleConfig | role: ${roleName} | tenant: ${companyId}`);
+    return perms;
+  } catch (err) {
+    logger.warn(`[FIREBASE] roleConfig permission read failed (non-fatal) | role: ${roleName} | tenant: ${companyId} | ${err.message}`);
+    return [];
+  }
+};
+
 const generateCustomToken = async (zdnaTenantId, claims) => {
   try {
     logger.debug(`[FIREBASE] Generating custom token | uid (zdnaTenantId): ${zdnaTenantId} | email: ${claims.email} | role: ${claims.role}`);
@@ -188,4 +256,4 @@ const verifyIdToken = async (idToken) => {
   return admin.auth().verifyIdToken(idToken);
 };
 
-module.exports = { generateCustomToken, verifyIdToken, writeUserPermissions };
+module.exports = { generateCustomToken, verifyIdToken, writeUserPermissions, getRolePermissionStrings, transformRolePermissions };
