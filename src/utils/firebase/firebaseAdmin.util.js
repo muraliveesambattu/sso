@@ -74,6 +74,35 @@ const toPermissionArray = (value) => {
   }
   return [];
 };
+
+/**
+ * Mirrors the native login's per-user permission provisioning
+ * (zdna-functions: updatePermission → tenants/{tenantId}/users/{uId}/
+ * userPermissions/permissionList). The console's getPermissions() reads this
+ * exact doc to enforce feature access (deny-list on `noaccess` entries). SSO
+ * users never had it written, so every SSO login fell through to default-allow
+ * (full access) regardless of assigned role — this closes that gap.
+ *
+ * Best-effort: a Firestore failure must never block the login/token issuance.
+ *
+ * @param {string} companyId   ZDNA company/tenant id (Firestore `tenants` doc)
+ * @param {string} uId         SSO user's Firebase uid (= zdnaTenantId)
+ * @param {Array}  permissions RMS-resolved permission array [{permissionString, permissionId}, ...]
+ */
+const writeUserPermissions = async (companyId, uId, permissions) => {
+  if ((!FIREBASE_CONFIGURED && !RUNNING_IN_FIREBASE) || !companyId || !uId) return;
+  try {
+    await admin.firestore()
+      .collection('tenants').doc(String(companyId))
+      .collection('users').doc(String(uId))
+      .collection('userPermissions').doc('permissionList')
+      .set({ permissions: Array.isArray(permissions) ? permissions : [] });
+    logger.debug(`[FIREBASE] Wrote userPermissions/permissionList | tenant: ${companyId} | uid: ${uId} | count: ${Array.isArray(permissions) ? permissions.length : 0}`);
+  } catch (err) {
+    logger.warn(`[FIREBASE] Failed to write userPermissions doc (non-fatal) | tenant: ${companyId} | uid: ${uId} | ${err.message}`);
+  }
+};
+
 const generateCustomToken = async (zdnaTenantId, claims) => {
   try {
     logger.debug(`[FIREBASE] Generating custom token | uid (zdnaTenantId): ${zdnaTenantId} | email: ${claims.email} | role: ${claims.role}`);
@@ -90,9 +119,17 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
     const roles = Array.isArray(claims.roles) ? claims.roles : [];
     // Prefer the pre-resolved permission list (permissionResolver — may come
     // from the role-management service); fall back to the zdna_roles union.
-    let zdnaPermissions = Array.isArray(claims.permissions)
+    const fullPermissions = Array.isArray(claims.permissions)
       ? claims.permissions
       : [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+
+    // Provision the per-user Firestore permission doc the console reads for
+    // feature enforcement — the FULL list (not the token-truncated copy).
+    // Awaited so it lands before the console's post-login getPermissions read,
+    // but best-effort: writeUserPermissions never throws.
+    await writeUserPermissions(claims.companyId, zdnaTenantId, fullPermissions);
+
+    let zdnaPermissions = fullPermissions;
 
     // Firebase custom-token claims share a ~1KB budget. If the permission list
     // would blow it, mint a marker instead — the frontend fetches the full set
@@ -151,4 +188,4 @@ const verifyIdToken = async (idToken) => {
   return admin.auth().verifyIdToken(idToken);
 };
 
-module.exports = { generateCustomToken, verifyIdToken };
+module.exports = { generateCustomToken, verifyIdToken, writeUserPermissions };

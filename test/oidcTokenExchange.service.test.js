@@ -30,6 +30,10 @@ jest.mock('../src/services/SSO/userResolution.service', () => ({
   resolveUser: jest.fn(),
 }));
 
+jest.mock('../src/services/SSO/permissionResolver.service', () => ({
+  resolvePermissions: jest.fn(),
+}));
+
 jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
   generateCustomToken: jest.fn(),
 }));
@@ -47,7 +51,9 @@ const { validateTokenClaims, validateUserClaims } = require('../src/utils/oidc/t
 const { exchangeCodeForTokens, decodeJwt, generateJwtAssertion } = require('../src/utils/oidc/tokenExchange.util');
 const { fetchUserGroupsFromGraph } = require('../src/utils/oidc/GraphApi.utils');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
+const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 const { generateCustomToken } = require('../src/utils/firebase/firebaseAdmin.util');
+const { logger } = require('../src/config/logger');
 
 describe('oidcTokenExchange.service', () => {
   const originalEnv = {
@@ -67,6 +73,7 @@ describe('oidcTokenExchange.service', () => {
       roles: [{ role_name: 'Admin' }],
       action: 'created',
     });
+    resolvePermissions.mockResolvedValue({ permissions: [], source: 'zdna_roles' });
     generateCustomToken.mockResolvedValue('firebase-custom-token');
     verifyJwtSignature.mockResolvedValue(undefined);
     generateJwtAssertion.mockReturnValue('signed-assertion');
@@ -145,6 +152,10 @@ describe('oidcTokenExchange.service', () => {
       tid: 'tenant-1',
       groups: ['group-a'],
     }), 'oidc');
+    expect(resolvePermissions).toHaveBeenCalledWith(
+      [{ role_name: 'Admin' }],
+      { user_id: 'user-1', email: 'user@example.com' }
+    );
     expect(generateCustomToken).toHaveBeenCalledWith('user-1', {
       email: 'user@example.com',
       role: 'Admin',
@@ -165,6 +176,19 @@ describe('oidcTokenExchange.service', () => {
         tenantScope: 'tenant-1',
       }),
     }));
+    expect(logger.info).toHaveBeenCalledWith('Step 9.5 OK: Permissions resolved', {
+      action: 'step_permissions',
+      company_id: 'company-1',
+      userAction: 'created',
+      permissionSource: 'zdna_roles',
+      permissionCount: 0,
+      roleName: null,
+    });
+    expect(logger.debug).toHaveBeenCalledWith('Step 9.5 DEBUG: Full resolved permissions', {
+      action: 'step_permissions_detail',
+      company_id: 'company-1',
+      resolvedPerms: { permissions: [], source: 'zdna_roles' },
+    });
   });
 
   test('fetches groups from Graph API when group overage claims are present', async () => {

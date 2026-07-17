@@ -18,18 +18,29 @@ const loadFirebaseUtil = ({
   const cert = jest.fn((config) => ({ kind: 'cert', config }));
   const initializeApp = jest.fn();
 
+  // Chainable Firestore mock: collection().doc().collection().doc().set()
+  const permissionSet = jest.fn(async () => undefined);
+  const firestorePath = [];
+  const chain = {
+    collection: jest.fn((c) => { firestorePath.push(['collection', c]); return chain; }),
+    doc: jest.fn((d) => { firestorePath.push(['doc', d]); return chain; }),
+    set: permissionSet,
+  };
+  const firestore = jest.fn(() => chain);
+
   jest.doMock('../src/config/logger', () => ({
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
   }));
   jest.doMock('firebase-admin', () => ({
     apps: adminApps,
     auth,
+    firestore,
     initializeApp,
     credential: { cert },
   }));
 
   const { generateCustomToken } = require('../src/utils/firebase/firebaseAdmin.util');
-  return { generateCustomToken, adminMock: { auth, createCustomToken, cert, initializeApp } };
+  return { generateCustomToken, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, firestorePath } };
 };
 
 describe('firebaseAdmin.util', () => {
@@ -126,6 +137,64 @@ describe('firebaseAdmin.util', () => {
     expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-5', expect.objectContaining({
       zdnaPermissions: ['console:dashboard'],
     }));
+  });
+
+  test('provisions the per-user Firestore permissionList doc the console reads', async () => {
+    const { generateCustomToken, adminMock } = loadFirebaseUtil({
+      env: {
+        FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
+        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+      },
+    });
+
+    const perms = [
+      { permissionString: 'zdna.myServices.noaccess', permissionId: 38 },
+      { permissionString: 'zdna.userManagement.noaccess', permissionId: 44 },
+    ];
+    await generateCustomToken('sso-uid-1', {
+      email: 'mgr@example.com',
+      role: 'Manager',
+      roles: [{ role_id: 'Manager', role_name: 'Manager' }],
+      permissions: perms,
+      companyId: 'company-xyz',
+      displayName: 'Manager User',
+    });
+
+    // Path: tenants/{companyId}/users/{uid}/userPermissions/permissionList
+    expect(adminMock.firestorePath).toEqual([
+      ['collection', 'tenants'],
+      ['doc', 'company-xyz'],
+      ['collection', 'users'],
+      ['doc', 'sso-uid-1'],
+      ['collection', 'userPermissions'],
+      ['doc', 'permissionList'],
+    ]);
+    expect(adminMock.permissionSet).toHaveBeenCalledWith({ permissions: perms });
+  });
+
+  test('does not fail token generation when the Firestore write throws', async () => {
+    const { generateCustomToken, adminMock } = loadFirebaseUtil({
+      env: {
+        FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
+        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+      },
+    });
+    adminMock.permissionSet.mockRejectedValueOnce(new Error('firestore down'));
+
+    const token = await generateCustomToken('sso-uid-2', {
+      email: 'mgr2@example.com',
+      role: 'Manager',
+      roles: [],
+      permissions: [{ permissionString: 'x', permissionId: 1 }],
+      companyId: 'company-abc',
+      displayName: 'Mgr Two',
+    });
+
+    // Login/token still succeeds despite the write failure (best-effort).
+    expect(token).toBe('firebase-token');
+    expect(adminMock.createCustomToken).toHaveBeenCalled();
   });
 
   test('defers oversized permission lists to /sso/me instead of blowing the claim budget', async () => {

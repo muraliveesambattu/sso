@@ -149,6 +149,19 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     // Step 9.5 — Resolve permissions (RMS when configured, zdna_roles union
     // otherwise — see permissionResolver.service.js)
     const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
+    logger.info('Step 9.5 OK: Permissions resolved', {
+      action: 'step_permissions',
+      company_id: companyId,
+      userAction: resolution.action,
+      permissionSource: resolvedPerms.source,
+      permissionCount: Array.isArray(resolvedPerms.permissions) ? resolvedPerms.permissions.length : 0,
+      roleName: resolvedPerms.roleName || null,
+    });
+    logger.debug('Step 9.5 DEBUG: Full resolved permissions', {
+      action: 'step_permissions_detail',
+      company_id: companyId,
+      resolvedPerms,
+    });
 
     // Step 10 — Generate Firebase Custom Token
     const zdnaTenantId = resolution.user.user_id;
