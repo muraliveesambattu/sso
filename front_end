@@ -1,0 +1,7 @@
+
+if (Array.isArray(user.claims.zdnaPermissions) && user.claims.zdnaPermissions.length) {
+  user.claims['userPermissions'] = { permissions: user.claims.zdnaPermissions }
+}
+
+In AuthProvider.js, add to the else if (loginType === 'entra') branch:
+
