@@ -42,7 +42,7 @@ describe('health.controller', () => {
     jest.resetModules();
   });
 
-  test('reports healthy with JSON fallback when no database is configured', async () => {
+  test('reports not_configured (still HTTP 200) when no database env is set', async () => {
     const loader = loadHealthController({ dbEnv: {} });
     const res = mockRes();
 
@@ -53,7 +53,7 @@ describe('health.controller', () => {
     expect(res.json.mock.calls[0][0]).toEqual(expect.objectContaining({
       status: 'healthy',
       version: '1.0.0-test',
-      checks: { database: { status: 'not_configured', detail: 'Using JSON fallback' } },
+      checks: { database: { status: 'not_configured', detail: 'DATABASE_URL / DB_HOST not set' } },
     }));
     loader.restore();
   });

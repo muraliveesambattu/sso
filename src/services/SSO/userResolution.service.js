@@ -165,7 +165,7 @@ const resolveRoles = async (companyId, identity) => {
   return [...known, ...passthrough];
 };
 
-// User store helpers delegate to localSSO.service.js (reads/writes src/data/ssoConfig.json)
+// User store helpers delegate to the PostgreSQL data layer (postgresSSO.service.js)
 
 // ── Main Export ───────────────────────────────────────────────────────────────
 

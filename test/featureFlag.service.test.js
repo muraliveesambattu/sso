@@ -1,17 +1,15 @@
-const loadFeatureFlagService = ({ usePostgres = false, queryImpl } = {}) => {
+const loadFeatureFlagService = ({ queryImpl } = {}) => {
   jest.resetModules();
 
   const query = jest.fn(queryImpl || (async () => []));
   const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
   jest.doMock('../src/config/logger', () => ({ logger }));
-  jest.doMock('../src/config/dataSource', () => ({ usePostgres }));
-  if (usePostgres) {
-    jest.doMock('../src/config/db', () => ({
-      query,
-      QueryTypes: { SELECT: 'SELECT' },
-    }));
-  }
+  // PostgreSQL is the sole backend — the DB module is always required.
+  jest.doMock('../src/config/db', () => ({
+    query,
+    QueryTypes: { SELECT: 'SELECT' },
+  }));
 
   const service = require('../src/services/featureFlag.service');
   return { ...service, query, logger };
@@ -46,7 +44,7 @@ describe('featureFlag.service', () => {
 
   test('honors environment kill switches before checking storage', async () => {
     process.env.FEATURE_SSO_ENABLED_DISABLED = 'true';
-    const { isEnabled, query } = loadFeatureFlagService({ usePostgres: true });
+    const { isEnabled, query } = loadFeatureFlagService();
 
     await expect(isEnabled('company-1', 'sso_enabled')).resolves.toBe(false);
     expect(query).not.toHaveBeenCalled();
@@ -54,7 +52,6 @@ describe('featureFlag.service', () => {
 
   test('uses the database value when PostgreSQL is enabled', async () => {
     const { isEnabled, query } = loadFeatureFlagService({
-      usePostgres: true,
       queryImpl: async () => [{ enabled: false }],
     });
 
@@ -64,7 +61,6 @@ describe('featureFlag.service', () => {
 
   test('falls back to default true when DB reads fail', async () => {
     const { isEnabled } = loadFeatureFlagService({
-      usePostgres: true,
       queryImpl: async () => { throw new Error('db offline'); },
     });
 
@@ -74,7 +70,6 @@ describe('featureFlag.service', () => {
   test('lists flags with env overrides, database values, and defaults', async () => {
     process.env.FEATURE_JIT_ENABLED_DISABLED = 'true';
     const { getFlagsForCompany, query } = loadFeatureFlagService({
-      usePostgres: true,
       queryImpl: async () => [{ enabled: false }],
     });
 
@@ -98,7 +93,6 @@ describe('featureFlag.service', () => {
 
   test('writes valid flags to PostgreSQL', async () => {
     const { setFlag, query } = loadFeatureFlagService({
-      usePostgres: true,
       queryImpl: async () => [],
     });
 

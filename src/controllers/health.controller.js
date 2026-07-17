@@ -26,12 +26,14 @@ const sequelize    = require('../config/db');
 const { logger } = require('../config/logger');
 const { version }  = require('../../package.json');
 
-const usePostgres  = !!(process.env.DATABASE_URL || process.env.DB_HOST);
+const dbConfigured = !!(process.env.DATABASE_URL || process.env.DB_HOST);
 
 // ── Check PostgreSQL ──────────────────────────────────────────────────────────
 const checkDatabase = async () => {
-  if (!usePostgres) {
-    return { status: 'not_configured', detail: 'Using JSON fallback' };
+  if (!dbConfigured) {
+    // PostgreSQL is the sole backend — an unset DATABASE_URL/DB_HOST is a
+    // deployment misconfiguration, not an intentional fallback.
+    return { status: 'not_configured', detail: 'DATABASE_URL / DB_HOST not set' };
   }
   const start = Date.now();
   try {

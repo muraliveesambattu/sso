@@ -60,8 +60,8 @@ if (!admin.apps.length) {
  * @returns {Promise<string>}     Firebase custom token (JWT)
  */
 
-// zdna_roles.permissions is JSON in Postgres but may arrive as a string from
-// the JSON store or raw driver — normalise to an array.
+// zdna_roles.permissions is JSONB in Postgres but may arrive as a string from
+// the raw driver — normalise to an array.
 const toPermissionArray = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') {

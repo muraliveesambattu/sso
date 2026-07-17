@@ -1,8 +1,7 @@
 /**
  * PostgreSQL SSO Service
  *
- * Implements the same API as localSSO.service.js — all callers work without change.
- * Used automatically when DATABASE_URL or DB_HOST is set in the environment.
+ * The sole data backend for all SSO configuration and user data.
  *
  * Tables: sso_integrations, oidc_configurations, saml_configurations,
  *         jit_mappings, zdna_roles, sso_users
@@ -24,8 +23,7 @@ const { encrypt, resolveSecret } = require('../../utils/crypto.util');
 
 // Resolve "env:VAR_NAME" references to their environment value; pass through
 // plain strings unchanged. Used for SAML entity_id / acs_url (which may be
-// stored as env: refs). Mirrors the helper in localSSO.service.js — its
-// absence here caused "resolveEnvRef is not defined" on the SAML login path.
+// stored as env: refs).
 const resolveEnvRef = (val) => {
   if (typeof val === 'string' && val.startsWith('env:')) {
     return process.env[val.slice(4)] || null;

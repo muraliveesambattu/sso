@@ -16,7 +16,6 @@
  */
 
 const { logger } = require('../config/logger');
-const { usePostgres } = require('../config/dataSource');
 
 const VALID_FLAGS = ['sso_enabled', 'jit_enabled'];
 
@@ -40,7 +39,6 @@ const getFlagFromFirestore = async (companyId, flagName) => {
 
 // ── DB read ───────────────────────────────────────────────────────────────────
 const getFlagFromDb = async (companyId, flagName) => {
-  if (!usePostgres) return null; // JSON fallback — no DB
   try {
     const sequelize = require('../config/db');
     const [rows] = await sequelize.query(
@@ -58,10 +56,6 @@ const getFlagFromDb = async (companyId, flagName) => {
 
 // ── DB write ──────────────────────────────────────────────────────────────────
 const setFlagInDb = async (companyId, flagName, enabled, updatedBy) => {
-  if (!usePostgres) {
-    logger.warn('Feature flags require PostgreSQL — running in JSON fallback mode', { action: 'feature_flag_no_db' });
-    return;
-  }
   const sequelize = require('../config/db');
   await sequelize.query(
     `INSERT INTO feature_flags (company_id, flag_name, enabled, updated_by, created_at, updated_at)

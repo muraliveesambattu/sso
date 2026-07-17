@@ -16,34 +16,31 @@
  */
 
 const { logger } = require('../../config/logger');
-const { usePostgres } = require('../../config/dataSource');
 
 const writeAuditLog = async ({ actor, actor_ip, action, resource, resource_id, status = 'success', detail }) => {
   const entry = { actor, actor_ip, action, resource, resource_id, status, detail };
 
-  if (usePostgres) {
-    try {
-      const sequelize = require('../../config/db');
-      await sequelize.query(
-        `INSERT INTO audit_logs (actor, actor_ip, action, resource, resource_id, status, detail, created_at)
-         VALUES (:actor, :actor_ip, :action, :resource, :resource_id, :status, :detail, NOW())`,
-        {
-          replacements: {
-            actor:       actor       || null,
-            actor_ip:    actor_ip    || null,
-            action,
-            resource:    resource    || null,
-            resource_id: resource_id || null,
-            status,
-            detail:      detail ? JSON.stringify(detail) : null,
-          },
-          type: sequelize.QueryTypes.INSERT,
-        }
-      );
-    } catch (err) {
-      // Never fail a request because of audit logging
-      logger.error('Audit log write failed', { action: 'audit_write_error', error: err.message });
-    }
+  try {
+    const sequelize = require('../../config/db');
+    await sequelize.query(
+      `INSERT INTO audit_logs (actor, actor_ip, action, resource, resource_id, status, detail, created_at)
+       VALUES (:actor, :actor_ip, :action, :resource, :resource_id, :status, :detail, NOW())`,
+      {
+        replacements: {
+          actor:       actor       || null,
+          actor_ip:    actor_ip    || null,
+          action,
+          resource:    resource    || null,
+          resource_id: resource_id || null,
+          status,
+          detail:      detail ? JSON.stringify(detail) : null,
+        },
+        type: sequelize.QueryTypes.INSERT,
+      }
+    );
+  } catch (err) {
+    // Never fail a request because of audit logging
+    logger.error('Audit log write failed', { action: 'audit_write_error', error: err.message });
   }
 
   // Always log to stdout (captured by GCP Cloud Logging)

@@ -25,7 +25,10 @@ const errorHandler   = require('./src/middlewares/errorHandler');
 const { globalLimiter }  = require('./src/middlewares/rateLimiter');
 const { healthCheck }    = require('./src/controllers/health.controller');
 const { requireAdminKey } = require('./src/middlewares/adminAuth.middleware');
-const { usePostgres }    = require('./src/config/dataSource');
+
+// PostgreSQL is the sole backend; the startup connection check runs whenever a
+// database is configured (an unset DATABASE_URL/DB_HOST is a misconfiguration).
+const dbConfigured = !!(process.env.DATABASE_URL || process.env.DB_HOST);
 
 const app = express();
 
@@ -137,7 +140,7 @@ if (require.main === module) {
   // ── DB Connection Check — retry with exponential back-off ───────────────────
   // A brief PostgreSQL blip at startup would silently degrade all DB-backed SSO
   // lookups for the lifetime of the instance without retry protection.
-  if (usePostgres) {
+  if (dbConfigured) {
     const sequelizeCheck = require('./src/config/db');
     (async () => {
       const MAX_ATTEMPTS = 5;

@@ -2,8 +2,7 @@
  * SSO Admin Controller
  *
  * CRUD-style admin endpoints for managing SSO configuration.
- * Backed by ssoDataService — automatically uses PostgreSQL when
- * DATABASE_URL / DB_HOST is set, otherwise falls back to ssoConfig.json.
+ * Backed by ssoDataService (PostgreSQL).
  *
  * All endpoints require X-Admin-API-Key (enforced at the router).
  *

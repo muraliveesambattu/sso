@@ -1,21 +1,13 @@
+// PostgreSQL is the sole backend. This service validates + derives fields and
+// hands the raw row to postgresSSO.service (which owns encryption, defaults,
+// and table shaping). Tests therefore assert on what pgSave receives.
 const loadService = ({
-  usePostgres = false,
-  readFileImpl,
-  writeFileImpl,
   pgSaveImpl,
   getByDomainImpl,
   extractImpl,
 } = {}) => {
   jest.resetModules();
 
-  const readFile = jest.fn(readFileImpl || (async () => JSON.stringify({
-    sso_integrations: [],
-    oidc_configurations: [],
-    saml_configurations: [],
-    jit_mappings: [],
-  })));
-  const writeFile = jest.fn(writeFileImpl || (async () => undefined));
-  const encrypt = jest.fn((value) => `enc:${value}`);
   const extractFromPkcs12 = jest.fn(extractImpl || (() => ({
     privateKeyB64: 'private-key-b64',
     thumbprintHex: 'thumbprint-hex',
@@ -26,32 +18,18 @@ const loadService = ({
   jest.doMock('../src/config/logger', () => ({
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
   }));
-  jest.doMock('uuid', () => ({ v4: jest.fn(() => 'uuid-value') }));
-  jest.doMock('../src/utils/crypto.util', () => ({ encrypt }));
   jest.doMock('../src/utils/oidc/pkcs12.util', () => ({ extractFromPkcs12 }));
-  jest.doMock('fs', () => ({ promises: { readFile, writeFile } }));
-  jest.doMock('../src/config/dataSource', () => ({ usePostgres }));
-  jest.doMock('../src/config/constants', () => ({
-    defaults: {
-      SSO_STATUS: 'active',
-      IDP: 'microsoft_entra',
-      OIDC_SCOPE: 'openid profile email offline_access',
-      OIDC_REDIRECT_URI: 'http://localhost:3000/auth/oidc/callback',
-      SAML_ENTITY_ID: 'https://zdna-sso.web.app/auth/metadata2',
-      SAML_ACS_URL: 'https://zdna-sso.web.app/auth/callback',
-    },
+  jest.doMock('../src/services/db/postgresSSO.service', () => ({
+    saveSsoConfig: pgSave,
+    getSsoIntegrationByDomain,
   }));
 
-  if (usePostgres) {
-    jest.doMock('../src/services/db/postgresSSO.service', () => ({
-      saveSsoConfig: pgSave,
-      getSsoIntegrationByDomain,
-    }));
-  }
-
   const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
-  return { saveSsoConfig, readFile, writeFile, encrypt, extractFromPkcs12, pgSave, getSsoIntegrationByDomain };
+  return { saveSsoConfig, extractFromPkcs12, pgSave, getSsoIntegrationByDomain };
 };
+
+// The row handed to pgSave (company_id + derived fields).
+const savedRow = (pgSave) => pgSave.mock.calls[0][0];
 
 describe('saveSsoConfig.service', () => {
   let dateNowSpy;
@@ -89,7 +67,7 @@ describe('saveSsoConfig.service', () => {
   });
 
   test('accepts arbitrary RMS role names as-is — not validated against zdna_roles', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+    const { saveSsoConfig, pgSave } = loadService();
 
     // RMS roles are defined per-tenant and are not enumerable from this
     // backend — a name with no matching zdna_roles row must save fine.
@@ -102,15 +80,14 @@ describe('saveSsoConfig.service', () => {
       ],
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.jit_mappings).toEqual([
-      expect.objectContaining({ mapping_source: 'department', role_id: 'Field Technician' }),
-      expect.objectContaining({ mapping_source: 'default', role_id: 'Supervisor' }),
+    expect(savedRow(pgSave).jit_mappings).toEqual([
+      expect.objectContaining({ mapping_source: 'department', zdna_role: 'Field Technician' }),
+      expect.objectContaining({ mapping_source: 'default', zdna_role: 'Supervisor' }),
     ]);
   });
 
   test('accepts an arbitrary Entra claim name as mapping_source (matched at login against the raw token)', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+    const { saveSsoConfig, pgSave } = loadService();
 
     await saveSsoConfig({
       protocol: 'oidc', domains: 'custom-claim.com', tenant_id: 'common',
@@ -118,9 +95,8 @@ describe('saveSsoConfig.service', () => {
       jit_mappings: [{ mapping_source: 'employeeType', mapping_value: 'Contractor', zdna_role: 'role-admin' }],
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.jit_mappings[0]).toEqual(expect.objectContaining({
-      mapping_source: 'employeetype', mapping_value: 'Contractor', role_id: 'role-admin',
+    expect(savedRow(pgSave).jit_mappings[0]).toEqual(expect.objectContaining({
+      mapping_source: 'employeetype', mapping_value: 'Contractor', zdna_role: 'role-admin',
     }));
   });
 
@@ -135,7 +111,7 @@ describe('saveSsoConfig.service', () => {
   });
 
   test('normalises mapping_source casing and honours the frontend order field as priority', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+    const { saveSsoConfig, pgSave } = loadService();
 
     await saveSsoConfig({
       protocol: 'oidc', domains: 'ordered.com', tenant_id: 'common',
@@ -146,15 +122,14 @@ describe('saveSsoConfig.service', () => {
       ],
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.jit_mappings).toEqual([
-      expect.objectContaining({ mapping_source: 'department', role_id: 'role-admin',   priority: 5 }),
-      expect.objectContaining({ mapping_source: 'group',      role_id: 'role-manager', priority: 2 }),
+    expect(savedRow(pgSave).jit_mappings).toEqual([
+      expect.objectContaining({ mapping_source: 'department', zdna_role: 'role-admin',   priority: 5 }),
+      expect.objectContaining({ mapping_source: 'group',      zdna_role: 'role-manager', priority: 2 }),
     ]);
   });
 
   test('falls back to array-position priority when order values are missing or duplicated', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+    const { saveSsoConfig, pgSave } = loadService();
 
     await saveSsoConfig({
       protocol: 'oidc', domains: 'dup-order.com', tenant_id: 'common',
@@ -166,12 +141,13 @@ describe('saveSsoConfig.service', () => {
       ],
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.jit_mappings.map(m => m.priority)).toEqual([1, 2, 3]);
+    expect(savedRow(pgSave).jit_mappings.map(m => m.priority)).toEqual([1, 2, 3]);
   });
 
   test('uses owner_tenant_id as the company_id when provided (matches deactivate/delete keying)', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+    const { saveSsoConfig, pgSave } = loadService({
+      getByDomainImpl: async () => ({ company_id: 'noaq1xgCe5otm425Yhk3' }),
+    });
 
     const result = await saveSsoConfig({
       protocol: 'oidc',
@@ -183,18 +159,15 @@ describe('saveSsoConfig.service', () => {
       owner_company_name: 'Zebra technologies',
     });
 
-    expect(result.company_id).toBe('noaq1xgCe5otm425Yhk3');
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.sso_integrations[0]).toEqual(expect.objectContaining({
+    expect(savedRow(pgSave)).toEqual(expect.objectContaining({
       company_id: 'noaq1xgCe5otm425Yhk3',
       owner_tenant_id: 'noaq1xgCe5otm425Yhk3',
     }));
-    expect(written.oidc_configurations[0].company_id).toBe('noaq1xgCe5otm425Yhk3');
+    expect(result.company_id).toBe('noaq1xgCe5otm425Yhk3');
   });
 
   test('proposes owner_tenant_id as the Postgres company_id, falling back to zdna-<domain>-<ts> without one', async () => {
     const { saveSsoConfig, pgSave } = loadService({
-      usePostgres: true,
       getByDomainImpl: async () => null,
     });
 
@@ -223,8 +196,10 @@ describe('saveSsoConfig.service', () => {
     }));
   });
 
-  test('saves OIDC configs to JSON with encrypted client secrets and normalized domains', async () => {
-    const { saveSsoConfig, writeFile } = loadService();
+  test('hands OIDC fields (raw client_secret + jit rows) to the Postgres layer', async () => {
+    const { saveSsoConfig, pgSave } = loadService({
+      getByDomainImpl: async () => ({ company_id: 'zdna-Example-COM-1700000000000' }),
+    });
 
     const result = await saveSsoConfig({
       protocol: 'oidc',
@@ -237,27 +212,21 @@ describe('saveSsoConfig.service', () => {
       jit_mappings: [{ mapping_source: 'default', zdna_role: 'role-manager' }],
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.sso_integrations[0]).toEqual(expect.objectContaining({
+    // The service derives company_id + entra_tenant_id and passes the secret
+    // through verbatim — encryption/defaults are postgresSSO.service's job.
+    expect(savedRow(pgSave)).toEqual(expect.objectContaining({
       company_id: 'zdna-Example-COM-1700000000000',
-      domains: 'example.com',
+      domains: 'Example.COM',
       protocol: 'oidc',
       entra_tenant_id: 'common',
+      client_id: 'client-1',
+      auth_method: 'client_secret',
+      client_secret: 'super-secret',
       jit_enabled: true,
     }));
-    expect(written.oidc_configurations[0]).toEqual(expect.objectContaining({
-      company_id: 'zdna-Example-COM-1700000000000',
-      client_id: 'client-1',
-      client_auth_method: 'client_secret',
-      client_secret: 'enc:super-secret',
-      scope: 'openid profile email offline_access',
-      redirect_uri: 'http://localhost:3000/auth/oidc/callback',
-    }));
-    expect(written.jit_mappings[0]).toEqual(expect.objectContaining({
-      company_id: 'zdna-Example-COM-1700000000000',
+    expect(savedRow(pgSave).jit_mappings[0]).toEqual(expect.objectContaining({
       mapping_source: 'default',
-      role_id: 'role-manager',
-      status: 'active',
+      zdna_role: 'role-manager',
     }));
     expect(result).toEqual({
       success: true,
@@ -266,8 +235,8 @@ describe('saveSsoConfig.service', () => {
     });
   });
 
-  test('extracts and stores client certificate material for private_key_jwt auth', async () => {
-    const { saveSsoConfig, writeFile, extractFromPkcs12 } = loadService();
+  test('extracts and passes client certificate material for private_key_jwt auth', async () => {
+    const { saveSsoConfig, pgSave, extractFromPkcs12 } = loadService();
 
     await saveSsoConfig({
       protocol: 'oidc',
@@ -279,22 +248,15 @@ describe('saveSsoConfig.service', () => {
       certificate_password: 'password-1',
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
     expect(extractFromPkcs12).toHaveBeenCalledWith('base64-p12', 'password-1');
-    expect(written.oidc_configurations[0]).toEqual(expect.objectContaining({
-      private_key_enc: 'enc:private-key-b64',
+    expect(savedRow(pgSave)).toEqual(expect.objectContaining({
+      private_key_b64: 'private-key-b64',
       client_cert_thumbprint: 'thumbprint-hex',
     }));
   });
 
-  test('derives SAML tenant ids from the SSO URL and initializes empty JSON stores when the file is missing', async () => {
-    const { saveSsoConfig, writeFile } = loadService({
-      readFileImpl: async () => {
-        const err = new Error('missing');
-        err.code = 'ENOENT';
-        throw err;
-      },
-    });
+  test('derives SAML tenant ids from the SSO URL', async () => {
+    const { saveSsoConfig, pgSave } = loadService();
 
     await saveSsoConfig({
       protocol: 'saml',
@@ -302,41 +264,16 @@ describe('saveSsoConfig.service', () => {
       sso_url: 'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2',
     });
 
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    expect(written.sso_integrations[0]).toEqual(expect.objectContaining({
+    expect(savedRow(pgSave)).toEqual(expect.objectContaining({
       domains: 'zebra.com',
       protocol: 'saml',
       entra_tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    }));
-    expect(written.saml_configurations[0]).toEqual(expect.objectContaining({
       sso_url: 'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2',
-      entity_id: 'https://zdna-sso.web.app/auth/metadata2',
-      acs_url: 'https://zdna-sso.web.app/auth/callback',
     }));
   });
 
-  test('throws CONFIG_READ_ERROR for unexpected JSON read failures', async () => {
-    const { saveSsoConfig } = loadService({
-      readFileImpl: async () => {
-        const err = new Error('permission denied');
-        err.code = 'EACCES';
-        throw err;
-      },
-    });
-
-    await expect(saveSsoConfig({
-      protocol: 'oidc',
-      domains: 'example.com',
-      tenant_id: 'common',
-    })).rejects.toMatchObject({
-      statusCode: 500,
-      code: 'CONFIG_READ_ERROR',
-    });
-  });
-
-  test('uses PostgreSQL when enabled and skips JSON writes on success', async () => {
-    const { saveSsoConfig, writeFile, pgSave, getSsoIntegrationByDomain } = loadService({
-      usePostgres: true,
+  test('persists via PostgreSQL and returns the stored company_id', async () => {
+    const { saveSsoConfig, pgSave, getSsoIntegrationByDomain } = loadService({
       getByDomainImpl: async () => ({ company_id: 'existing-company-id' }),
     });
 
@@ -355,13 +292,11 @@ describe('saveSsoConfig.service', () => {
       client_secret: 'pg-secret',
     }));
     expect(getSsoIntegrationByDomain).toHaveBeenCalledWith('pg.example.com');
-    expect(writeFile).not.toHaveBeenCalled();
     expect(result.company_id).toBe('existing-company-id');
   });
 
   test('strips ?appid from the SAML sso_url before the Postgres save (AADSTS750054 regression)', async () => {
     const { saveSsoConfig, pgSave } = loadService({
-      usePostgres: true,
       getByDomainImpl: async () => ({ company_id: 'saml-company-id' }),
     });
 
@@ -383,9 +318,8 @@ describe('saveSsoConfig.service', () => {
   // The silent JSON fallback on PostgreSQL failure was removed intentionally:
   // it masked DB write failures (returned 201 while nothing persisted). The
   // error must now propagate so the caller sees the failure.
-  test('propagates the error when PostgreSQL save fails (no silent JSON fallback)', async () => {
-    const { saveSsoConfig, writeFile, pgSave } = loadService({
-      usePostgres: true,
+  test('propagates the error when the PostgreSQL save fails', async () => {
+    const { saveSsoConfig, pgSave } = loadService({
       pgSaveImpl: async () => { throw new Error('db unavailable'); },
       getByDomainImpl: async () => null,
     });
@@ -400,28 +334,5 @@ describe('saveSsoConfig.service', () => {
     })).rejects.toThrow('db unavailable');
 
     expect(pgSave).toHaveBeenCalled();
-    expect(writeFile).not.toHaveBeenCalled(); // must NOT silently fall back to JSON
-  });
-
-  test('strips any ?appid= query from the SAML sso_url before persisting', async () => {
-    const { saveSsoConfig, writeFile } = loadService({
-      readFileImpl: async () => {
-        const err = new Error('missing');
-        err.code = 'ENOENT';
-        throw err;
-      },
-    });
-
-    await saveSsoConfig({
-      protocol: 'saml',
-      domains: 'appid.example.com',
-      sso_url: 'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2?appid=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-    });
-
-    const written = JSON.parse(writeFile.mock.calls[0][1]);
-    // stored URL must be clean (no query) so the login redirect's own '?' is valid
-    expect(written.saml_configurations[0].sso_url).toBe(
-      'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2'
-    );
   });
 });

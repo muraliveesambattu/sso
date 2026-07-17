@@ -1,17 +1,5 @@
-const { v4: uuidv4 } = require('uuid');
 const { logger } = require('../../config/logger');
-const { encrypt } = require('../../utils/crypto.util');
 const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
-
-// Module-level I/O setup — resolved once at startup, not on every invocation.
-const fsp  = require('fs').promises;
-const path = require('path');
-const CONFIG_PATH = path.join(__dirname, '../../data/ssoConfig.json');
-
-const { usePostgres } = require('../../config/dataSource');
-
-// Centralised defaults — env-overridable, single source in config/constants.js.
-const { defaults: DEFAULTS } = require('../../config/constants');
 
 // Validation patterns/allow-lists.
 const ALLOWED_PROTOCOLS = ['oidc', 'saml'];
@@ -114,36 +102,6 @@ const extractCert = async (protocol, auth_method, certificate, certificate_passw
   return { private_key_b64: privateKeyB64, client_cert_thumbprint: thumbprintHex };
 };
 
-// ── Row builders — each owns exactly one table's shape ────────────────────────
-
-const buildIntegrationRow = ({ company_id, domains, protocol, idp, entraTenantId,
-  owner_tenant_id, owner_company_name, jit_enabled }) => ({
-  id:                 `${company_id}_${domains.replace(/\./g, '_')}`,
-  company_id,
-  domains:            domains.toLowerCase(),
-  protocol,
-  sso_status:         DEFAULTS.SSO_STATUS,
-  idp:                idp || DEFAULTS.IDP,
-  entra_tenant_id:    entraTenantId,
-  owner_tenant_id:    owner_tenant_id || null,
-  owner_company_name: owner_company_name || null,
-  jit_enabled:        !!jit_enabled,
-});
-
-const buildOidcRow = ({ company_id, client_id, auth_method, client_secret,
-  redirect_uri, private_key_b64, client_cert_thumbprint }) => ({
-  id:                    company_id,
-  company_id,
-  client_id,
-  client_auth_method:    auth_method,
-  client_secret:         client_secret ? encrypt(client_secret) : null,
-  // Client Certificate (private_key_jwt) — store encrypted base64(PEM) key + thumbprint
-  private_key_enc:       private_key_b64 ? encrypt(private_key_b64) : null,
-  client_cert_thumbprint: client_cert_thumbprint || null,
-  scope:                 DEFAULTS.OIDC_SCOPE,
-  redirect_uri:          redirect_uri || DEFAULTS.OIDC_REDIRECT_URI,
-});
-
 // Admins may paste the SSO URL with ?appid=<application-id> — used by
 // test-connection to verify the app's signing certificate ownership. The
 // login redirect builder appends its own '?SAMLRequest=...' (hardcoded '?'),
@@ -158,80 +116,12 @@ const stripUrlQuery = (url) => {
   }
 };
 
-const buildSamlRow = ({ company_id, entity_id, sso_url, acs_url, certificate }) => ({
-  id:         company_id,
-  company_id,
-  entity_id:  entity_id || DEFAULTS.SAML_ENTITY_ID,
-  sso_url:    stripUrlQuery(sso_url),
-  acs_url:    acs_url || DEFAULTS.SAML_ACS_URL,
-  certificate: certificate || null,
-});
-
-const buildJitRows = (company_id, jit_mappings) =>
-  jit_mappings
-    .filter(m => m.zdna_role && m.mapping_source)
-    .map((m, i) => ({
-      id:             `jit-${company_id}-${i}`,
-      company_id,
-      mapping_source: m.mapping_source,
-      mapping_value:  m.mapping_value || null,
-      role_id:        m.zdna_role,
-      priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
-      status:         DEFAULTS.SSO_STATUS,
-    }));
-
-// JSON fallback — append to ssoConfig.json (used when no DB is configured, and
-// as a safety net when PostgreSQL is unavailable). Fully async so it never
-// blocks the event loop.
-const saveToJson = async (params) => {
-  const { company_id, protocol, domains, jit_enabled, jit_mappings } = params;
-
-  let data;
-  try {
-    const raw = await fsp.readFile(CONFIG_PATH, 'utf8');
-    data = JSON.parse(raw);
-  } catch (readErr) {
-    if (readErr.code === 'ENOENT') {
-      // Fresh deploy — start from an empty store rather than crashing.
-      data = { sso_integrations: [], oidc_configurations: [], saml_configurations: [], jit_mappings: [] };
-      logger.warn('[SAVE-SSO] Config file missing — initialising empty store', { action: 'save_sso_config_missing' });
-    } else {
-      const err = new Error(`Failed to read SSO config file before write: ${readErr.message}`);
-      err.code = 'CONFIG_READ_ERROR';
-      err.statusCode = 500;
-      throw err;
-    }
-  }
-
-  data.sso_integrations = (data.sso_integrations || []).filter(r => r.domains !== domains.toLowerCase());
-  data.sso_integrations.push(buildIntegrationRow(params));
-
-  if (protocol === 'oidc') {
-    data.oidc_configurations = (data.oidc_configurations || []).filter(r => r.company_id !== company_id);
-    data.oidc_configurations.push(buildOidcRow(params));
-  }
-
-  if (protocol === 'saml') {
-    data.saml_configurations = (data.saml_configurations || []).filter(r => r.company_id !== company_id);
-    data.saml_configurations.push(buildSamlRow(params));
-  }
-
-  if (jit_enabled && Array.isArray(jit_mappings) && jit_mappings.length) {
-    data.jit_mappings = (data.jit_mappings || []).filter(r => r.company_id !== company_id);
-    data.jit_mappings.push(...buildJitRows(company_id, jit_mappings));
-  }
-
-  await fsp.writeFile(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf8');
-  logger.debug(`[SAVE-SSO] Persisted to ssoConfig.json | company_id: ${company_id}`);
-};
-
 // Persist to PostgreSQL via the data layer; returns the actual company_id used
-// (may differ from the proposed one if the domain already existed). If the DB
-// is unavailable, fall back to the JSON store so the save is not lost.
+// (may differ from the proposed one if the domain already existed).
 //
 // NOTE: the data-layer require stays lazy (inside this function) on purpose —
 // it pulls in Sequelize models, and hoisting it to module scope would load the
-// ORM even on the JSON-only path. It is only reached when usePostgres is true.
+// ORM at import time even for callers that never persist.
 const saveToPostgres = async (proposedCompanyId, fields) => {
   const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
   await pgSave({ company_id: proposedCompanyId, ...fields });
@@ -242,8 +132,7 @@ const saveToPostgres = async (proposedCompanyId, fields) => {
 };
 
 /**
- * Validates, derives, and persists an SSO configuration to PostgreSQL (when a
- * database is configured) or the local JSON store.
+ * Validates, derives, and persists an SSO configuration to PostgreSQL.
  *
  * @param {Object} payload
  * @param {'oidc'|'saml'} payload.protocol
@@ -267,7 +156,6 @@ const saveToPostgres = async (proposedCompanyId, fields) => {
  * @throws {Error} statusCode:400 — MISSING_PROTOCOL | MISSING_DOMAINS | INVALID_PROTOCOL |
  *                 INVALID_DOMAINS | MISSING_TENANT_ID | INVALID_TENANT_ID | MISSING_SSO_URL |
  *                 INVALID_SSO_URL | INVALID_PKCS12 | NO_PRIVATE_KEY
- * @throws {Error} statusCode:500 — CONFIG_READ_ERROR
  */
 const saveSsoConfig = async (payload) => {
   const {
@@ -301,10 +189,9 @@ const saveSsoConfig = async (payload) => {
     tenant_id, entra_tenant_id: entraTenantId, entraTenantId,
     owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
-    // Strip ?appid=... (and any other query) here — once, for BOTH stores.
-    // buildSamlRow also strips for the JSON path, but the Postgres path used
-    // to persist the URL verbatim, which corrupted the login redirect
-    // (double '?' → AADSTS750054).
+    // Strip ?appid=... (and any other query) here so the persisted URL carries
+    // no query string — the login redirect builder appends its own
+    // '?SAMLRequest=...' (a verbatim URL would double the '?' → AADSTS750054).
     sso_url: stripUrlQuery(sso_url), entity_id, acs_url, certificate,
     sign_auth: sign_auth || false,
     private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
@@ -312,13 +199,7 @@ const saveSsoConfig = async (payload) => {
     jit_enabled, jit_mappings: normalizedJitMappings,
   };
 
-  let company_id;
-  if (usePostgres) {
-    company_id = await saveToPostgres(proposedCompanyId, fields);
-  } else {
-    company_id = proposedCompanyId;
-    await saveToJson({ company_id, ...fields });
-  }
+  const company_id = await saveToPostgres(proposedCompanyId, fields);
 
   return {
     success:    true,
