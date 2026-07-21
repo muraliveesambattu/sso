@@ -1,25 +1,36 @@
 jest.mock('../src/config/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 
-const forge = require('node-forge');
+const { execFileSync } = require('child_process');
+const fs   = require('fs');
+const os   = require('os');
+const path = require('path');
 const { SignedXml } = require('xml-crypto');
 const { verifyXmlSignature } = require('../src/utils/saml/samlSignature.util');
 
-// Generate a self-signed cert + matching private key, then enveloped-sign an XML
-// document so the happy path (valid signature → true) is exercised end-to-end.
-const makeSignedXml = () => {
-  const keys = forge.pki.rsa.generateKeyPair(1024);
-  const cert = forge.pki.createCertificate();
-  cert.publicKey = keys.publicKey;
-  cert.serialNumber = '01';
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter  = new Date(Date.now() + 365 * 24 * 3600 * 1000);
-  const attrs = [{ name: 'commonName', value: 'saml-test' }];
-  cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.sign(keys.privateKey, forge.md.sha256.create());
+// Generate a self-signed cert + matching private key with openssl (no node-forge).
+const makeKeyAndCert = () => {
+  const dir      = fs.mkdtempSync(path.join(os.tmpdir(), 'saml-'));
+  const keyPath  = path.join(dir, 'key.pem');
+  const certPath = path.join(dir, 'cert.pem');
+  try {
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256',
+      '-keyout', keyPath, '-out', certPath,
+      '-days', '365', '-subj', '/CN=saml-test',
+    ], { stdio: 'ignore' });
+    return {
+      privateKeyPem: fs.readFileSync(keyPath, 'utf8'),
+      certPem:       fs.readFileSync(certPath, 'utf8'),
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
 
-  const privateKeyPem = forge.pki.privateKeyToPem(keys.privateKey);
-  const certPem       = forge.pki.certificateToPem(cert);
+// Enveloped-sign an XML document with xml-crypto so the happy path
+// (valid signature → true) is exercised end-to-end.
+const makeSignedXml = () => {
+  const { privateKeyPem, certPem } = makeKeyAndCert();
 
   const xml = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_resp1"><saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">ok</saml:Assertion></samlp:Response>`;
 

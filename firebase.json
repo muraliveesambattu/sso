@@ -11,35 +11,9 @@
     ],
     "runtime": "nodejs22"
   },
-  "hosting": {
-    "target": "zdna-sso",
-    "public": "client/dist",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "/auth/**",
-        "function": "sso"
-      },
-      {
-        "source": "/v1/auth/**",
-        "function": "sso"
-      },
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ]
-  },
   "emulators": {
     "functions": {
       "port": 5009
-    },
-    "hosting": {
-      "port": 5008
     }
   }
 }

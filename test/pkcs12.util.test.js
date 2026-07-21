@@ -1,24 +1,33 @@
 jest.mock('../src/config/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 
-const forge = require('node-forge');
+const { execFileSync } = require('child_process');
+const fs   = require('fs');
+const os   = require('os');
+const path = require('path');
 const { extractFromPkcs12 } = require('../src/utils/oidc/pkcs12.util');
 
-// Build a real PKCS#12 bundle (self-signed) so the happy path is exercised end-to-end.
+// Build a real PKCS#12 bundle (self-signed) with openssl — the same tool
+// pkcs12.util.js uses to extract — so the happy path is exercised end-to-end
+// with no node-forge dependency.
 const buildP12 = (password) => {
-  const keys = forge.pki.rsa.generateKeyPair(1024); // 1024 = fast enough for tests
-  const cert = forge.pki.createCertificate();
-  cert.publicKey = keys.publicKey;
-  cert.serialNumber = '01';
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter  = new Date(Date.now() + 365 * 24 * 3600 * 1000);
-  const attrs = [{ name: 'commonName', value: 'test-cert' }];
-  cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.sign(keys.privateKey);
-
-  const asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], password, { algorithm: '3des' });
-  const der  = forge.asn1.toDer(asn1).getBytes();
-  return forge.util.encode64(der);
+  const dir      = fs.mkdtempSync(path.join(os.tmpdir(), 'p12-'));
+  const keyPath  = path.join(dir, 'key.pem');
+  const certPath = path.join(dir, 'cert.pem');
+  const p12Path  = path.join(dir, 'bundle.p12');
+  try {
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', keyPath, '-out', certPath,
+      '-days', '365', '-subj', '/CN=test-cert',
+    ], { stdio: 'ignore' });
+    execFileSync('openssl', [
+      'pkcs12', '-export', '-inkey', keyPath, '-in', certPath,
+      '-out', p12Path, '-passout', `pass:${password}`,
+    ], { stdio: 'ignore' });
+    return fs.readFileSync(p12Path).toString('base64');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 };
 
 // NOTE: extractFromPkcs12 is ASYNC — it returns a Promise and rejects on error.
