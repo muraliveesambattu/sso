@@ -30,6 +30,7 @@ const {
 } = require('../db/ssoDataService');
 const { stateStore } = require('../../config/stateStore');
 const { microsoft } = require('../../config/constants');
+const { resolveSecret } = require('../../utils/crypto.util');
 
 // ── OIDC State Store ──────────────────────────────────────────────────────────
 // In-memory, TTL-based store keyed by `state` (10-minute expiry, single-use).
@@ -41,14 +42,10 @@ const DOMAIN_REGEX = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 // ── Config Readers ────────────────────────────────────────────────────────────
 
-// Resolves env: references in sensitive config values.
-// e.g. "env:MY_SECRET" → process.env.MY_SECRET
-const resolveEnvRef = (val) => {
-  if (typeof val === 'string' && val.startsWith('env:')) {
-    return process.env[val.slice(4)] || null;
-  }
-  return val;
-};
+// Secret resolution (env: refs AND enc: encrypted values) uses the shared
+// crypto.util.resolveSecret — see resolveSecret below. A previous local helper
+// only handled env: refs and silently passed enc:-encrypted secrets through
+// undecrypted.
 
 // Finds the active SSO integration for a domain
 const lookupSsoConfig = async (domain) => {
@@ -96,11 +93,11 @@ const lookupSsoConfig = async (domain) => {
       entra_tenant_id:        integration.entra_tenant_id,
       client_id:              oidc.client_id,
       client_auth_method:     oidc.client_auth_method,
-      client_secret:          resolveEnvRef(oidc.client_secret),
+      client_secret:          resolveSecret(oidc.client_secret),
       client_cert_enc:        oidc.client_cert_enc,
       client_cert_thumbprint: oidc.client_cert_thumbprint,
       sso_url:                ssoUrl,   // dynamic — overrides any value in oidc_configurations
-      redirect_uri:           resolveEnvRef(oidc.redirect_uri),
+      redirect_uri:           resolveSecret(oidc.redirect_uri),
     };
   }
 

@@ -1,13 +1,25 @@
 const { checkDomain } = require('../services/SSO/domainCheck.service');
 const { logger }      = require('../config/logger');
 
+const MAX_INPUT_LEN = 256;
+
+// Coerce to a bounded, trimmed string or null — rejects non-string request
+// bodies and oversized input before they reach validation / domain lookups.
+const asBoundedString = (v) => {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  return trimmed.length > 0 && trimmed.length <= MAX_INPUT_LEN ? trimmed : null;
+};
+
 const domainCheck = async (req, res, next) => {
   try {
-    const email     = req.body.email  ? String(req.body.email).trim()  : null;
-    const rawDomain = req.body.domain ? String(req.body.domain).trim() : null;
+    const email     = asBoundedString(req.body.email);
+    const rawDomain = asBoundedString(req.body.domain);
     const domain    = rawDomain?.includes('@') ? rawDomain.split('@')[1] : rawDomain;
 
-    logger.info('Domain check request', {
+    // debug (not info): /auth/domain-check is a high-traffic unauthenticated
+    // entry point already covered by the requestLogger middleware.
+    logger.debug('Domain check request', {
       action: 'domain_check',
       email:  email  || undefined,
       domain: domain || undefined,

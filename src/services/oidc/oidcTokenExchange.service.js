@@ -3,7 +3,7 @@
  * Handles server-to-server token exchange with Microsoft Entra.
  */
 
-const { getSsoIntegrationByCompanyId, getOidcConfig } = require('../db/ssoDataService');
+const { getSsoIntegrationByCompanyId, getOidcConfig, getJitMappings } = require('../db/ssoDataService');
 const { verifyJwtSignature }                      = require('../../utils/oidc/jwkValidation.util');
 const { validateTokenClaims, validateUserClaims } = require('../../utils/oidc/tokenValidation.util');
 const { exchangeCodeForTokens, decodeJwt, generateJwtAssertion } = require('../../utils/oidc/tokenExchange.util');
@@ -13,24 +13,20 @@ const { resolvePermissions }                      = require('../SSO/permissionRe
 const { generateCustomToken }                     = require('../../utils/firebase/firebaseAdmin.util');
 const { logger }                                  = require('../../config/logger');
 const { microsoft }                               = require('../../config/constants');
+const { resolveSecret }                           = require('../../utils/crypto.util');
 
 const CONSUMER_MSA_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad';
-
-const resolveEnvRef = (val) => {
-  if (typeof val === 'string' && val.startsWith('env:')) return process.env[val.slice(4)] || null;
-  return val;
-};
 
 const resolveAuthCredential = (oidcConfig, codeVerifier, tenantId) => {
   switch (oidcConfig.client_auth_method) {
     case 'client_secret_post':
     case 'client_secret':
     case 'secret':
-      return resolveEnvRef(oidcConfig.client_secret);
+      return resolveSecret(oidcConfig.client_secret);
     case 'private_key_jwt':
       return generateJwtAssertion(
         oidcConfig.client_id, tenantId,
-        resolveEnvRef(oidcConfig.client_cert_enc),
+        resolveSecret(oidcConfig.client_cert_enc),
         oidcConfig.client_cert_thumbprint
       );
     case 'none':
@@ -49,7 +45,19 @@ const resolveUserGroups = async (idTokenClaims, accessToken) => {
   if (idTokenClaims.groups?.length > 0) return idTokenClaims.groups;
   if (idTokenClaims._claim_names?.groups) {
     logger.info('Group overage — fetching from Graph API', { action: 'group_overage' });
-    return fetchUserGroupsFromGraph(accessToken);
+    // A Graph outage during group-overage must NOT fail the whole login: a
+    // group-based JIT mapping can fall back to a 'default' mapping, and a
+    // non-JIT / non-group tenant doesn't need groups at all. Degrade to no
+    // groups and let role resolution decide (a tenant that requires a group
+    // match with no 'default' will still be denied downstream).
+    try {
+      return await fetchUserGroupsFromGraph(accessToken);
+    } catch (err) {
+      logger.warn('Graph group lookup failed — proceeding with no groups', {
+        action: 'graph_groups_fallback', error: err.message,
+      });
+      return [];
+    }
   }
   return [];
 };
@@ -83,7 +91,7 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     const tokenEndpoint = microsoft.tokenUrl(ssoIntegration.entra_tenant_id);
     const tokens = await exchangeCodeForTokens(
       code, oidcConfig.client_id, oidcConfig.client_auth_method,
-      authCredential, resolveEnvRef(oidcConfig.redirect_uri), tokenEndpoint
+      authCredential, resolveSecret(oidcConfig.redirect_uri), tokenEndpoint
     );
     logger.debug('Step 4 OK: Tokens received', { action: 'step_tokens', token_type: tokens.token_type });
 
@@ -118,15 +126,26 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
 
     // Department/job title feed the department/jobtitle JIT mapping sources.
     // The id_token never carries them, so ask Graph — but only when JIT is on
-    // (non-JIT ignores mappings), and never let a profile failure kill a login.
+    // AND a mapping actually uses them. Per LLD 8.2 §7a: if the attribute is
+    // REQUIRED by a mapping and the Graph call fails, reject the login (the
+    // correct role can't be determined). If no dept/jobtitle mapping exists the
+    // attribute isn't needed, so a Graph blip must not block valid logins.
     let profile = { department: null, jobTitle: null };
     if (ssoIntegration.jit_enabled) {
-      try {
-        profile = await fetchUserProfileFromGraph(tokens.access_token);
-      } catch (err) {
-        logger.warn('Graph profile fetch failed — department/jobtitle mappings inactive this login', {
-          action: 'graph_profile_failed', error: err.message,
-        });
+      const jitMappings = await getJitMappings(companyId);
+      const needsProfile = jitMappings.some(m =>
+        m.mapping_source === 'department' || m.mapping_source === 'jobtitle');
+      if (needsProfile) {
+        try {
+          profile = await fetchUserProfileFromGraph(tokens.access_token);
+        } catch (err) {
+          logger.warn('Graph profile fetch failed for a required department/jobtitle mapping — rejecting login', {
+            action: 'graph_profile_failed', error: err.message,
+          });
+          const e = new Error('Failed to retrieve required user profile attributes from Microsoft Graph');
+          e.statusCode = 502; e.code = 'GRAPH_PROFILE_FETCH_FAILED';
+          throw e;
+        }
       }
     }
 

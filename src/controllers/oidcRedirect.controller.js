@@ -2,19 +2,17 @@
  * OIDC Redirect Controller
  *
  * Handles the browser redirect from Microsoft Entra after user authentication.
- * Entra sends the authorization code + state to this GET endpoint.
+ * Entra sends the authorization code + state to this GET endpoint, which relays
+ * them to the separately-hosted frontend's /auth/oidc/callback route. The React
+ * app there renders OIDCCallback, which POSTs to /auth/oidc/token-exchange.
  *
- * Production (same-origin): Express serves React's index.html directly.
- *   The browser keeps the /auth/oidc/callback?code=...&state=... URL.
- *   React Router renders OIDCCallback, which POSTs to /auth/oidc/token-exchange.
- *
- * Development (separate origins): Redirects to the local frontend dev server
- *   so the React app running on localhost:3000 can handle the callback.
+ * The frontend is hosted separately (not bundled with this microservice) — set
+ * FRONTEND_URL to its origin. This mirrors the SAML callback controller, which
+ * already relays to FRONTEND_URL.
  *
  * GET /auth/oidc/callback?code=...&state=...&session_state=...
  */
 
-const path = require('path');
 const { logger } = require('../config/logger');
 const { defaults } = require('../config/constants');
 
@@ -26,9 +24,8 @@ const handleOidcRedirect = (req, res) => {
   // Entra returned an error (e.g. user cancelled login)
   if (error) {
     logger.error(`[OIDC-REDIRECT] Entra returned error: ${error} — ${error_description}`);
-    const frontendUrl = defaults.FRONTEND_URL;
     return res.redirect(
-      `${frontendUrl}/auth/oidc/error?error=${encodeURIComponent(error)}&description=${encodeURIComponent(error_description || '')}`
+      `${defaults.FRONTEND_URL}/auth/oidc/error?error=${encodeURIComponent(error)}&description=${encodeURIComponent(error_description || '')}`
     );
   }
 
@@ -40,20 +37,10 @@ const handleOidcRedirect = (req, res) => {
     });
   }
 
-  // ── Production: same-origin — serve React SPA directly ──────────────────────
-  // Redirecting to FRONTEND_URL/auth/oidc/callback would loop back to this same
-  // Express route. Instead, serve index.html so React Router renders OIDCCallback.
-  // The code + state remain in the URL for the React component to read.
-  if (process.env.NODE_ENV === 'production') {
-    logger.debug(`[OIDC-REDIRECT] Production same-origin — serving React SPA for OIDCCallback`);
-    return res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
-  }
-
-  // ── Development: separate frontend origin — relay via redirect ───────────────
-  const frontendUrl = defaults.FRONTEND_URL;
-  const redirectUrl = `${frontendUrl}/auth/oidc/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
-
-  logger.debug(`[OIDC-REDIRECT] Dev mode — relaying code to frontend | url: ${frontendUrl}/auth/oidc/callback`);
+  // Relay code + state to the separately-hosted frontend callback route. The
+  // React app renders OIDCCallback and POSTs /auth/oidc/token-exchange.
+  const redirectUrl = `${defaults.FRONTEND_URL}/auth/oidc/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
+  logger.debug(`[OIDC-REDIRECT] Relaying code to frontend | url: ${defaults.FRONTEND_URL}/auth/oidc/callback`);
 
   return res.redirect(redirectUrl);
 };

@@ -10,7 +10,7 @@ jest.mock('../src/config/constants', () => ({
   defaults: { FRONTEND_URL: 'http://localhost:3000' },
 }));
 
-const { samlCallbackController } = require('../src/controllers/samlCallback.Controller');
+const { samlCallbackController } = require('../src/controllers/samlCallback.controller');
 const { processSamlCallback } = require('../src/services/Saml/samlCallback.service');
 
 const mockReq = (body = {}, headers = {}) => ({
@@ -28,7 +28,7 @@ const mockRes = () => {
   return res;
 };
 
-describe('samlCallback.Controller', () => {
+describe('samlCallback.controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });

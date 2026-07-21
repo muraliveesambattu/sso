@@ -5,6 +5,7 @@ jest.mock('../src/config/logger', () => ({
 jest.mock('../src/services/db/ssoDataService', () => ({
   getSsoIntegrationByCompanyId: jest.fn(),
   getOidcConfig: jest.fn(),
+  getJitMappings: jest.fn(),
 }));
 
 jest.mock('../src/utils/oidc/jwkValidation.util', () => ({
@@ -24,6 +25,7 @@ jest.mock('../src/utils/oidc/tokenExchange.util', () => ({
 
 jest.mock('../src/utils/oidc/GraphApi.utils', () => ({
   fetchUserGroupsFromGraph: jest.fn(),
+  fetchUserProfileFromGraph: jest.fn(),
 }));
 
 jest.mock('../src/services/SSO/userResolution.service', () => ({
@@ -45,11 +47,11 @@ jest.mock('../src/config/constants', () => ({
 }));
 
 const { oidcTokenExchangeService } = require('../src/services/oidc/oidcTokenExchange.service');
-const { getSsoIntegrationByCompanyId, getOidcConfig } = require('../src/services/db/ssoDataService');
+const { getSsoIntegrationByCompanyId, getOidcConfig, getJitMappings } = require('../src/services/db/ssoDataService');
 const { verifyJwtSignature } = require('../src/utils/oidc/jwkValidation.util');
 const { validateTokenClaims, validateUserClaims } = require('../src/utils/oidc/tokenValidation.util');
 const { exchangeCodeForTokens, decodeJwt, generateJwtAssertion } = require('../src/utils/oidc/tokenExchange.util');
-const { fetchUserGroupsFromGraph } = require('../src/utils/oidc/GraphApi.utils');
+const { fetchUserGroupsFromGraph, fetchUserProfileFromGraph } = require('../src/utils/oidc/GraphApi.utils');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
 const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 const { generateCustomToken } = require('../src/utils/firebase/firebaseAdmin.util');
@@ -68,6 +70,7 @@ describe('oidcTokenExchange.service', () => {
 
     validateTokenClaims.mockReturnValue(undefined);
     validateUserClaims.mockReturnValue({ email: 'user@example.com', name: 'User One' });
+    getJitMappings.mockResolvedValue([]); // no dept/jobtitle mapping → Graph profile not fetched
     resolveUser.mockResolvedValue({
       user: { user_id: 'user-1', email: 'user@example.com' },
       roles: [{ role_name: 'Admin' }],
@@ -225,6 +228,69 @@ describe('oidcTokenExchange.service', () => {
       groups: ['group-from-graph'],
     }), 'oidc');
     expect(result.session.groupSource).toBe('graph_api');
+  });
+
+  test('does not fail login when group-overage Graph lookup fails — proceeds with no groups', async () => {
+    // A Graph outage during group overage must not block login; role resolution
+    // falls back to the 'default' JIT mapping. Regression guard for the try/catch.
+    getSsoIntegrationByCompanyId.mockResolvedValue({
+      company_id: 'company-2',
+      protocol: 'oidc',
+      entra_tenant_id: 'common',
+    });
+    getOidcConfig.mockResolvedValue({
+      client_id: 'client-2',
+      client_auth_method: 'client_secret_post',
+      client_secret: 'env:OIDC_CLIENT_SECRET_ZDNA',
+      redirect_uri: 'env:OIDC_REDIRECT_URI',
+    });
+    exchangeCodeForTokens.mockResolvedValue({
+      token_type: 'Bearer', access_token: 'graph-access-token', id_token: 'id-token',
+    });
+    decodeJwt.mockReturnValue({
+      header: { alg: 'RS256' },
+      payload: { tid: 'another-tenant', email: 'user@example.com', _claim_names: { groups: 'src1' } },
+    });
+    fetchUserGroupsFromGraph.mockRejectedValue(new Error('graph down'));
+
+    const result = await oidcTokenExchangeService('code-4', 'company-2', null, 'nonce-2', '1.2.3.4');
+
+    expect(fetchUserGroupsFromGraph).toHaveBeenCalledWith('graph-access-token');
+    expect(resolveUser).toHaveBeenCalledWith('company-2', expect.objectContaining({ groups: [] }), 'oidc');
+    expect(result.customToken).toBeDefined();
+  });
+
+  test('rejects login (502) when a department/jobtitle mapping needs Graph but the profile fetch fails', async () => {
+    // Per LLD 8.2 §7a — attribute required for a JIT mapping + Graph failure → reject.
+    getSsoIntegrationByCompanyId.mockResolvedValue({
+      company_id: 'company-1',
+      protocol: 'oidc',
+      entra_tenant_id: 'tenant-1',
+      jit_enabled: true,
+    });
+    getOidcConfig.mockResolvedValue({
+      client_id: 'client-1',
+      client_auth_method: 'client_secret',
+      client_secret: 'env:OIDC_CLIENT_SECRET_ZDNA',
+      redirect_uri: 'http://localhost:3000/auth/oidc/callback',
+    });
+    exchangeCodeForTokens.mockResolvedValue({
+      token_type: 'Bearer', access_token: 'access-token', id_token: 'id-token',
+    });
+    decodeJwt.mockReturnValue({
+      header: { alg: 'RS256' },
+      payload: { tid: 'tenant-1', email: 'user@example.com' },
+    });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin', priority: 1 },
+    ]);
+    fetchUserProfileFromGraph.mockRejectedValue(new Error('graph down'));
+
+    await expect(
+      oidcTokenExchangeService('code-graph', 'company-1', null, 'nonce', '1.2.3.4')
+    ).rejects.toMatchObject({ statusCode: 502, code: 'GRAPH_PROFILE_FETCH_FAILED' });
+
+    expect(resolveUser).not.toHaveBeenCalled();
   });
 
   test('supports private_key_jwt auth and accepts the consumers tenant alias', async () => {

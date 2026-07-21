@@ -214,6 +214,22 @@ describe('userResolution.service', () => {
     expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
   });
 
+  test('rejects login (403) when no JIT mapping matches and no default is configured', async () => {
+    // Per LLD 8.2 §7c — an unmatched JIT user with no 'default' mapping is denied
+    // login rather than admitted with an empty role set (fail-open).
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'role', mapping_value: 'Zebra.Admin', role_id: 'role-admin', priority: 1 },
+    ]);
+    findUserByOid.mockResolvedValue(null);
+
+    await expect(resolveUser('company-1', {
+      email: 'norole@example.com', oid: 'oid-norole', groups: [], // no app roles → 'role' won't match; no default
+    }, 'oidc')).rejects.toMatchObject({ statusCode: 403, code: 'JIT_NO_MATCHING_ROLE' });
+
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
   test('passes through a JIT-mapped role that is not in the local zdna_roles catalog', async () => {
     // jit_mappings.role_id may hold a name from the tenant's own RMS role
     // catalog rather than a local zdna_roles id — getRolesByIds legitimately
@@ -330,6 +346,7 @@ describe('userResolution.service', () => {
         oid: 'oid-4',
         login_method: 'sso',
         roles: ['role-manager'],
+        last_login: expect.any(String), // resolution.user now reflects the saved update
       },
       roles: [{ role_id: 'role-manager', role_name: 'Manager' }],
       action: 'login',

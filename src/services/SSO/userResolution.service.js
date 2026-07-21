@@ -36,21 +36,21 @@ const toGroupArray = (value) => {
 
 const extractIdentity = (claims, protocol) => {
   if (protocol === 'saml') {
-    const a = claims; // SAML attributes object (already extracted)
+    const attrs = claims; // SAML attributes object (already extracted)
     return {
-      email: a.emailaddress || a.email || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'] || null,
-      oid: a.objectidentifier || a['http://schemas.microsoft.com/identity/claims/objectidentifier'] || null,
-      displayName: a.name || a.displayname || a.givenname || null,
-      groups: toGroupArray(a.groups),
+      email: attrs.emailaddress || attrs.email || attrs['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'] || null,
+      oid: attrs.objectidentifier || attrs['http://schemas.microsoft.com/identity/claims/objectidentifier'] || null,
+      displayName: attrs.name || attrs.displayname || attrs.givenname || null,
+      groups: toGroupArray(attrs.groups),
       // Optional mapping attributes — present only when the Entra admin adds
       // them to the SAML claim configuration (user.department / user.jobtitle
       // / app roles). Absent attributes simply never match a mapping.
-      department: a.department || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department'] || null,
-      jobTitle:   a.jobtitle || a.jobTitle || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
-      appRoles:   toGroupArray(a.role || a.roles),
+      department: attrs.department || attrs['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department'] || null,
+      jobTitle:   attrs.jobtitle || attrs.jobTitle || attrs['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
+      appRoles:   toGroupArray(attrs.role || attrs.roles),
       // Full attribute bag — lets JIT mappings match on ANY Entra claim name,
       // not just the 4 named ones above (see matchesMapping's default case).
-      raw: a,
+      raw: attrs,
     };
   }
 
@@ -148,6 +148,17 @@ const resolveRoles = async (companyId, identity) => {
     if (defaultMapping) assignedRoleIds.add(defaultMapping.role_id);
   }
 
+  // Per LLD 8.2 §7c: a JIT user who matches no mapping AND has no 'default'
+  // mapping is denied login — rather than admitted with an empty role set,
+  // which the console's deny-list enforcement would treat as default-allow.
+  // Tenants can add a 'default' mapping to admit unmatched users with a floor role.
+  if (assignedRoleIds.size === 0) {
+    const err = new Error('No JIT role mapping matched this user and no default mapping is configured');
+    err.statusCode = 403;
+    err.code = 'JIT_NO_MATCHING_ROLE';
+    throw err;
+  }
+
   const roleIds = [...assignedRoleIds];
   const known   = await getRolesByIds(roleIds);
 
@@ -178,8 +189,12 @@ const resolveRoles = async (companyId, identity) => {
  * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
  */
 const resolveUser = async (companyId, claims, protocol) => {
-  // Step 1: Get jit_enabled for this company
-  const integration = await getSsoIntegrationByCompanyId(companyId);
+  // Step 1: Load the integration and the jit_enabled flag in parallel — they're
+  // independent reads, so awaiting them sequentially just adds login latency.
+  const [integration, jitFlag] = await Promise.all([
+    getSsoIntegrationByCompanyId(companyId),
+    isEnabled(companyId, 'jit_enabled'),
+  ]);
 
   if (!integration) {
     const err = new Error(`SSO integration not found for company: ${companyId}`);
@@ -191,7 +206,6 @@ const resolveUser = async (companyId, claims, protocol) => {
   // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
   // Flag takes priority over sso_integrations.jit_enabled column.
   // This lets admins disable JIT without changing the SSO config record.
-  const jitFlag    = await isEnabled(companyId, 'jit_enabled');
   const jitEnabled = integration.jit_enabled === true && jitFlag;
 
   if (integration.jit_enabled && !jitFlag) {
@@ -203,7 +217,11 @@ const resolveUser = async (companyId, claims, protocol) => {
   // Step 2: Extract normalised identity
   const identity = extractIdentity(claims, protocol);
 
-  if (!identity.oid || !identity.email) {
+  // Require oid and email to be non-empty STRINGS. A malformed SAML/OIDC
+  // assertion can yield a nested object/array that is truthy but unusable — and
+  // oid is used downstream as a DB key / Firebase UID.
+  const isNonEmptyString = (v) => typeof v === 'string' && v.trim().length > 0;
+  if (!isNonEmptyString(identity.oid) || !isNonEmptyString(identity.email)) {
     const err = new Error('Identity claims missing required fields: oid and email');
     err.statusCode = 400;
     err.code = 'MISSING_IDENTITY_CLAIMS';
@@ -231,16 +249,18 @@ const resolveUser = async (companyId, claims, protocol) => {
         last_login:      new Date().toISOString(),
       });
       action = 'created';
-      logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
+      logger.info('[JIT] User created', { action: 'jit_user_created', email: identity.email, roles: roles.map(r => r.role_id) });
     } else {
       // Re-login — sync roles + update last_login
-      await updateUser(user.user_id || user.id, {
+      const updates = {
         roles:        roles.map(r => r.role_id),
         display_name: identity.displayName || user.display_name,
         last_login:   new Date().toISOString(),
-      });
+      };
+      await updateUser(user.user_id || user.id, updates);
+      user = { ...user, ...updates }; // reflect the freshly-saved fields, not the stale row
       action = 'updated';
-      logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
+      logger.info('[JIT] User updated', { action: 'jit_user_updated', email: identity.email, roles: updates.roles });
     }
 
     return { user, roles, action };
@@ -271,7 +291,7 @@ const resolveUser = async (companyId, claims, protocol) => {
 
   // Step D: Collect role name and id, then trigger login
   const roles = await getRolesByIds(user.roles || []);
-  logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
+  logger.info('[NON-JIT] User login', { action: 'non_jit_user_login', email: identity.email, login_method: user.login_method || 'sso' });
 
   // Update last_login — roles unchanged for non-JIT users. Pre-provisioned
   // users are created with a `pending:` oid placeholder (the real Entra oid
@@ -282,6 +302,7 @@ const resolveUser = async (companyId, claims, protocol) => {
     nonJitUpdates.oid = identity.oid;
   }
   await updateUser(user.user_id || user.id, nonJitUpdates);
+  user = { ...user, ...nonJitUpdates }; // reflect the freshly-saved fields, not the stale row
 
   return { user, roles, action: 'login' };
 };

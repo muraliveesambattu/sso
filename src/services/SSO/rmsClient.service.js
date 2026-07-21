@@ -94,8 +94,15 @@ const fetchUserPermissionsFromRms = async ({ email, userKey }) => {
   if (!res.ok) {
     // Capture RMS's error body — the status alone doesn't say WHY it failed
     // (wrong zuid, unknown user, bad Origin, …). res is a raw fetch Response.
+    // Cap the body: RMS error bodies can echo the request's email/zuid and are
+    // unbounded, so pass a truncated snippet as a structured field (not the
+    // message) to bound log size and keep it out of the free-text message.
     const bodyText = await res.text().catch(() => '<unreadable>');
-    logger.warn(`RMS /user HTTP ${res.status} body >> ${bodyText}`, { action: 'rms_user_http_error', status: res.status });
+    logger.warn('RMS /user request failed', {
+      action: 'rms_user_http_error',
+      status: res.status,
+      body:   bodyText.slice(0, 500),
+    });
     throw new Error(`RMS /user responded HTTP ${res.status}`);
   }
   const payload = await res.json();

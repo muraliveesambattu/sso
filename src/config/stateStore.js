@@ -20,12 +20,13 @@ const { logger } = require('./logger');
 class MemoryStateStore {
   constructor() {
     this.map = new Map();
-    // Clean up expired entries every 5 minutes (unref so it never blocks exit).
-    const timer = setInterval(() => this._cleanup(), 5 * 60 * 1000);
-    if (timer.unref) timer.unref();
+    // No module-load setInterval — background timers can delay Cloud Function
+    // instance recycling. Expiry is lazy: get() purges on read, and set() does
+    // an opportunistic sweep so abandoned (never-read) entries can't accumulate.
   }
 
   async set(key, value, ttlSeconds = 600) {
+    this._cleanup();
     this.map.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
   }
 

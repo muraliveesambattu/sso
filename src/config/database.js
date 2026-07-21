@@ -16,7 +16,9 @@ const fromUrl = process.env.DATABASE_URL
   ? { url: process.env.DATABASE_URL, ...base }
   : {
       username: process.env.DB_USER     || 'sso_user',
-      password: process.env.DB_PASSWORD || 'sso_secret',
+      // No hardcoded password fallback — a missing DB_PASSWORD must fail the
+      // connection, never silently authenticate with a source-controlled secret.
+      password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME     || 'sso_db',
       host:     process.env.DB_HOST     || 'localhost',
       port:     Number(process.env.DB_PORT) || 5432,

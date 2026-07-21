@@ -68,7 +68,9 @@ describe('samlSignature.util — verifyXmlSignature', () => {
     try {
       accepted = verifyXmlSignature(xmlWithFakeSig, DUMMY_CERT_B64) === true;
     } catch (e) {
-      // Any rejection (raw parse error or a coded SIGNATURE/INVALID error) is fine.
+      // Any rejection (raw parse error or a coded SIGNATURE/INVALID error) is fine —
+      // what matters is that a forged signature does NOT verify as true.
+      expect(e).toBeInstanceOf(Error);
       accepted = false;
     }
     expect(accepted).toBe(false);

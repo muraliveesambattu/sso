@@ -164,8 +164,9 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
     .split('microsoftonline.com/')[1]
     .split('/')[0];
 
-  // LAYER 7: Parse XML (reuse the already-decoded xml from Layer 1)
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  // LAYER 7: Reuse the document already parsed in Layer 2 — parsing the same
+  // XML twice duplicates CPU-bound work on every SAML callback.
+  const doc = docForId;
 
   const parserError = doc.getElementsByTagName('parsererror')[0];
   if (parserError) {
@@ -239,17 +240,20 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
 
   const processingTime = Date.now() - startTime;
 
-  // LAYER 15: Audit Log
-  logger.debug('[SAML_LOGIN_SUCCESS]', JSON.stringify({
-    timestamp: new Date().toISOString(),
+  // LAYER 15: Audit trace — pass structured fields (NOT a JSON.stringify'd
+  // string) so the logger's field-level PII masking (email/oid/tenantId) applies
+  // and Cloud Logging can query them. The durable audit record is written
+  // separately via audit.service.writeAuditLog.
+  logger.debug('[SAML_LOGIN_SUCCESS]', {
+    action: 'saml_login_success',
     oid,
     email,
     tenantId: allAttributes['http://schemas.microsoft.com/identity/claims/tenantid'] || allAttributes.tenantid,
     clientIp,
     processingTimeMs: processingTime,
     sessionAge,
-    protocol: 'saml'
-  }));
+    protocol: 'saml',
+  });
 
   // LAYER 16: User Resolution (JIT or non-JIT)
   const resolution = await resolveUser(samlConfig.company_id, allAttributes, 'saml');

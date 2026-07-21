@@ -6,7 +6,7 @@ jest.mock('../src/config/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const { domainCheck } = require('../src/controllers/domianCheck.Controller');
+const { domainCheck } = require('../src/controllers/domainCheck.controller');
 const { checkDomain } = require('../src/services/SSO/domainCheck.service');
 
 const mockReq = (body = {}) => ({

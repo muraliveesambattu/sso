@@ -54,4 +54,15 @@ const defaults = {
   FRONTEND_URL:      process.env.FRONTEND_URL      || 'http://localhost:3000',
 };
 
-module.exports = { microsoft, defaults, MS_LOGIN_BASE, MS_GRAPH_BASE, MS_STS_BASE };
+// Guard: in production, redirect/frontend URLs must be HTTPS. The localhost
+// http:// literals above are dev-only fallbacks — if they leak into a prod
+// deploy (env var left unset) fail fast rather than run with an insecure scheme.
+const assertSecureUrl = (name, value) => {
+  if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(value || '')) {
+    throw new Error(`Insecure URL for ${name} in production: ${value}. Use HTTPS.`);
+  }
+};
+assertSecureUrl('OIDC_REDIRECT_URI', defaults.OIDC_REDIRECT_URI);
+assertSecureUrl('FRONTEND_URL', defaults.FRONTEND_URL);
+
+module.exports = { microsoft, defaults, MS_LOGIN_BASE, MS_GRAPH_BASE, MS_STS_BASE, assertSecureUrl };

@@ -5,17 +5,25 @@
  *
  * Only RS256 is accepted — rejects alg=none and HS256 attacks.
  *
- * Production note: Cache JWKS keys with ~1hr TTL to avoid hitting
- * Entra on every request. Keys rotate infrequently.
+ * JWKS keys are cached per tenant with a ~1hr TTL (Entra rotates signing keys
+ * infrequently) so we don't hit Entra on every verification. If a token's `kid`
+ * isn't in the cached set the cache is refreshed once before rejecting — this
+ * handles a key rotation that happened before the TTL expired.
  */
 
 const https  = require('https');
 const crypto = require('crypto');
 const { microsoft } = require('../../config/constants');
 
-const JWKS_TIMEOUT_MS = 10000;
+const JWKS_TIMEOUT_MS   = 10000;
+const JWKS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const jwksCache = new Map(); // tenantId -> { jwks, expiresAt }
 
-const fetchJwks = (tenantId) => {
+// Marks an error as a JWKS-retrieval failure (network/timeout/HTTP/parse) so
+// the caller can report it as a retryable 503 rather than a 401 auth rejection.
+const jwksError = (message) => Object.assign(new Error(message), { jwksFetchError: true });
+
+const fetchJwksFromNetwork = (tenantId) => {
   return new Promise((resolve, reject) => {
     const url = microsoft.jwksUrl(tenantId);
 
@@ -30,16 +38,31 @@ const fetchJwks = (tenantId) => {
       res.on('end', () => {
         try {
           if (res.statusCode === 200) resolve(JSON.parse(data));
-          else reject(new Error(`JWKS fetch failed: HTTP ${res.statusCode}`));
+          else reject(jwksError(`JWKS fetch failed: HTTP ${res.statusCode}`));
         } catch (err) {
-          reject(new Error(`Failed to parse JWKS response: ${err.message}`));
+          reject(jwksError(`Failed to parse JWKS response: ${err.message}`));
         }
       });
     });
-    req.on('error', err => reject(new Error(`JWKS network error: ${err.message}`)));
-    req.on('timeout', () => { req.destroy(); reject(new Error('JWKS fetch timed out')); });
+    req.on('error', err => reject(jwksError(`JWKS network error: ${err.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(jwksError('JWKS fetch timed out')); });
   });
 };
+
+// Returns the tenant's JWKS, served from a 1hr cache. `forceRefresh` bypasses
+// the cache — used on a kid miss, where keys may have rotated before the TTL.
+const getJwks = async (tenantId, forceRefresh = false) => {
+  if (!forceRefresh) {
+    const cached = jwksCache.get(tenantId);
+    if (cached && cached.expiresAt > Date.now()) return cached.jwks;
+  }
+  const jwks = await fetchJwksFromNetwork(tenantId);
+  jwksCache.set(tenantId, { jwks, expiresAt: Date.now() + JWKS_CACHE_TTL_MS });
+  return jwks;
+};
+
+// Test hook — clears the JWKS cache. Never call from production code.
+const __resetJwksCache = () => jwksCache.clear();
 
 const verifyJwtSignature = async (token, tenantId) => {
   try {
@@ -52,8 +75,13 @@ const verifyJwtSignature = async (token, tenantId) => {
       throw new Error(`Unsupported algorithm: ${header.alg}. Only RS256 accepted`);
     }
 
-    const jwks = await fetchJwks(tenantId);
-    const key  = jwks.keys.find(k => k.kid === header.kid);
+    let jwks = await getJwks(tenantId);
+    let key  = jwks.keys.find(k => k.kid === header.kid);
+    if (!key) {
+      // kid not in the cached set — signing keys may have rotated; refresh once.
+      jwks = await getJwks(tenantId, true);
+      key  = jwks.keys.find(k => k.kid === header.kid);
+    }
     if (!key) throw new Error(`Signing key (kid: ${header.kid}) not found in JWKS`);
 
     const publicKey      = crypto.createPublicKey({ key, format: 'jwk' });
@@ -66,6 +94,15 @@ const verifyJwtSignature = async (token, tenantId) => {
     return true;
 
   } catch (err) {
+    // Distinguish a JWKS-retrieval outage (retryable) from an actual token
+    // rejection: a transient Microsoft-side failure must not look like a bad
+    // signature to the caller.
+    if (err.jwksFetchError) {
+      const error = new Error(`JWKS unavailable: ${err.message}`);
+      error.statusCode = 503;
+      error.code = 'JWKS_UNAVAILABLE';
+      throw error;
+    }
     const error = new Error(`JWT verification error: ${err.message}`);
     error.statusCode = 401;
     error.code = 'JWT_VERIFICATION_FAILED';
@@ -73,4 +110,4 @@ const verifyJwtSignature = async (token, tenantId) => {
   }
 };
 
-module.exports = { verifyJwtSignature };
+module.exports = { verifyJwtSignature, __resetJwksCache };

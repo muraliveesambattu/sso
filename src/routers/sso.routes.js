@@ -2,8 +2,8 @@
 const express = require('express');
 const router  = express.Router();
 
-const { domainCheck }           = require('../controllers/domianCheck.Controller');
-const { samlCallbackController } = require('../controllers/samlCallback.Controller');
+const { domainCheck }           = require('../controllers/domainCheck.controller');
+const { samlCallbackController } = require('../controllers/samlCallback.controller');
 const { handleOidcCallback }    = require('../controllers/oidcTokenExchange.controller');
 const { handleOidcRedirect }    = require('../controllers/oidcRedirect.controller');
 const { handleTestConnection }  = require('../controllers/testConnection.controller');

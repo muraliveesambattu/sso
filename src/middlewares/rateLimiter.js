@@ -14,12 +14,12 @@ const domainCheckLimiter = rateLimit({
   legacyHeaders: false,
   validate: { trustProxy: false },
   handler: (req, res) => {
-    logger.debug('[RATE_LIMIT_EXCEEDED]', JSON.stringify({
-      timestamp: new Date().toISOString(),
+    logger.warn('Rate limit exceeded', {
+      action: 'rate_limit_exceeded',
       ip: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
-      endpoint: '/api/sso/domain-check'
-    }));
-    
+      endpoint: '/api/sso/domain-check',
+    });
+
     res.status(429).json({
       success: false,
       error: 'Too many domain check requests. Please try again later.',
@@ -42,12 +42,12 @@ const samlCallbackLimiter = rateLimit({
   legacyHeaders: false,
   validate: { trustProxy: false },
   handler: (req, res) => {
-    logger.debug('[RATE_LIMIT_EXCEEDED]', JSON.stringify({
-      timestamp: new Date().toISOString(),
+    logger.warn('Rate limit exceeded', {
+      action: 'rate_limit_exceeded',
       ip: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
-      endpoint: '/api/sso/saml/callback'
-    }));
-    
+      endpoint: '/api/sso/saml/callback',
+    });
+
     res.status(429).json({
       success: false,
       error: 'Too many login attempts. Please try again later.',

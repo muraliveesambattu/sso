@@ -4,20 +4,27 @@ const { defaults } = require('../config/constants');
 
 const FRONTEND_URL = defaults.FRONTEND_URL;
 
+// Upper bounds so a non-string body or oversized value can't reach base64
+// decoding / XML parsing downstream. Entra SAMLResponses are well under 200KB.
+const MAX_SAML_RESPONSE_LEN = 200000;
+const MAX_RELAY_STATE_LEN   = 512;
+
+const isValidField = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
+
 const samlCallbackController = async (req, res, next) => {
   try {
     const { SAMLResponse, RelayState } = req.body;
 
-    // Input validation
-    if (!SAMLResponse) {
-      logger.warn('[SAML] Missing SAMLResponse in callback');
+    // Input validation — type + length, not just truthiness
+    if (!isValidField(SAMLResponse, MAX_SAML_RESPONSE_LEN)) {
+      logger.warn('[SAML] Missing or invalid SAMLResponse in callback');
       return res.redirect(
         `${FRONTEND_URL}/auth/oidc/callback?error=MISSING_SAML_RESPONSE`
       );
     }
 
-    if (!RelayState) {
-      logger.warn('[SAML] Missing RelayState in callback');
+    if (!isValidField(RelayState, MAX_RELAY_STATE_LEN)) {
+      logger.warn('[SAML] Missing or invalid RelayState in callback');
       return res.redirect(
         `${FRONTEND_URL}/auth/oidc/callback?error=MISSING_RELAY_STATE`
       );
@@ -45,17 +52,18 @@ const samlCallbackController = async (req, res, next) => {
     );
 
   } catch (err) {
-    // Audit failed login attempts
-    logger.error('[SAML_LOGIN_FAILED]', JSON.stringify({
-      timestamp: new Date().toISOString(),
-      error: err.message,
-      code: err.code,
+    // Audit failed login attempts — structured fields (NOT a JSON.stringify'd
+    // string) so logger PII masking applies and the fields stay queryable.
+    // relayState omitted: opaque, no diagnostic value, avoids logging it.
+    logger.error('[SAML_LOGIN_FAILED]', {
+      action:     'saml_login_failed',
+      error:      err.message,
+      code:       err.code,
       statusCode: err.statusCode,
-      clientIp: req.headers['x-forwarded-for']?.split(',')[0].trim()
+      clientIp:   req.headers['x-forwarded-for']?.split(',')[0].trim()
         || req.ip
         || req.connection.remoteAddress,
-      relayState: req.body.RelayState
-    }));
+    });
 
     // Redirect to frontend with error
     return res.redirect(

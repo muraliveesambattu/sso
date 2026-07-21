@@ -83,7 +83,7 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
     // Generate AuthnRequest XML
     const xml = generateAuthnRequestXml(authnRequestId, entityId, acsUrl, ssoUrl);
     
-    logger.debug('[SAML_AUTHN_REQUEST_XML]', xml);
+    logger.debug('SAML AuthnRequest XML generated', { action: 'saml_authn_request_xml', xml });
     
     // Store in server-side Map keyed by authnRequestId.
     // Cannot use session cookie here — sameSite:lax blocks cookies on the
@@ -122,21 +122,21 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
       ? `${ssoUrl}${sep}SAMLRequest=${urlEncoded}&RelayState=${relayState}&SigAlg=${signed.sigAlg}&Signature=${signed.signature}`
       : `${ssoUrl}${sep}SAMLRequest=${urlEncoded}&RelayState=${relayState}`;
 
-    logger.debug('[SAML_AUTHN_REQUEST_SIGNED]', !!signed);
-    
-    // Audit log
-    logger.debug('[SAML_AUTHN_REQUEST]', JSON.stringify({
-      timestamp: new Date().toISOString(),
+    logger.debug('SAML AuthnRequest signed', { action: 'saml_authn_request_signed', signed: !!signed });
+
+    // Audit trace — structured fields so logger PII masking applies
+    logger.debug('SAML AuthnRequest created', {
+      action: 'saml_authn_request',
       authnRequestId,
       sessionId,
       entityId,
-      ssoUrl
-    }));
+      ssoUrl,
+    });
 
     return redirectUrl;
     
   } catch (err) {
-    logger.error('[SAML_AUTHN_REQUEST_ERROR]', err);
+    logger.error('SAML AuthnRequest generation failed', { action: 'saml_authn_request_error', error: err.message });
     const error = new Error('Failed to generate SAML AuthnRequest');
     error.statusCode = 500;
     error.code = 'AUTHN_REQUEST_GENERATION_FAILED';

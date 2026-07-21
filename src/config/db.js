@@ -42,7 +42,14 @@ const buildDialectOptions = (socketPath) => ({
     // TCP — used locally
     : {
         ssl: process.env.DB_SSL === 'true'
-          ? { require: true, rejectUnauthorized: false }
+          // Validate the server cert by default; only skip when an operator
+          // explicitly opts in (self-signed local/test certs). A custom CA can
+          // be supplied via DB_SSL_CA instead of disabling validation entirely.
+          ? {
+              require: true,
+              rejectUnauthorized: process.env.DB_SSL_ALLOW_SELF_SIGNED !== 'true',
+              ...(process.env.DB_SSL_CA ? { ca: process.env.DB_SSL_CA } : {}),
+            }
           : false,
       }
   ),

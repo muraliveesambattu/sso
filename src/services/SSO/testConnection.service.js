@@ -104,7 +104,12 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
     ? sso_url.replace('/saml2', '/federationmetadata/2007-06/federationmetadata.xml')
     : microsoft.samlMetadataUrl(tenant_id);
 
-  const res = await fetchJson(metadataUrl, { method: 'GET', rejectUnauthorized: false });
+  // TLS validation stays ON by default (Entra endpoints have valid certs); only
+  // a test-connection against a self-signed / staging IdP may opt out explicitly.
+  const res = await fetchJson(metadataUrl, {
+    method: 'GET',
+    ...(process.env.SSO_TEST_ALLOW_SELF_SIGNED === 'true' ? { rejectUnauthorized: false } : {}),
+  });
   if (res.status !== 200) {
     return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
   }

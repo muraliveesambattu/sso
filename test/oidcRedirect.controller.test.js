@@ -72,13 +72,16 @@ describe('oidcRedirect.controller', () => {
     loader.restore();
   });
 
-  test('serves the built SPA in production', () => {
-    const loader = loadOidcRedirectController({ nodeEnv: 'production' });
+  test('relays to the separately-hosted frontend callback in production (no bundled client)', () => {
+    const loader = loadOidcRedirectController({ nodeEnv: 'production', frontendUrl: 'https://app.example.com' });
     const res = mockRes();
 
     loader.handleOidcRedirect({ query: { code: 'code-2', state: 'state-2' } }, res);
 
-    expect(res.sendFile).toHaveBeenCalledWith(expect.stringMatching(/client\/dist\/index\.html$/));
+    expect(res.redirect).toHaveBeenCalledWith(
+      'https://app.example.com/auth/oidc/callback?code=code-2&state=state-2'
+    );
+    expect(res.sendFile).not.toHaveBeenCalled();
     loader.restore();
   });
 });

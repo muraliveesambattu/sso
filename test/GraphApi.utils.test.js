@@ -20,28 +20,33 @@ describe('GraphApi.utils', () => {
     requestSpy.mockRestore();
   });
 
+  // Callbacks are extracted to named helpers so the mock's function nesting
+  // stays within 4 levels (SonarQube javascript:S2004).
+  const emitBody = (res, response) => {
+    if (response.body !== undefined) res.emit('data', response.body);
+    res.emit('end');
+  };
+
+  const emitResponse = (req, callback, response) => {
+    if (response.timeout) {
+      process.nextTick(() => req.emit('timeout'));
+      return;
+    }
+    if (response.error) {
+      process.nextTick(() => req.emit('error', response.error));
+      return;
+    }
+    const res = new EventEmitter();
+    res.statusCode = response.statusCode;
+    callback(res);
+    process.nextTick(() => emitBody(res, response));
+  };
+
   const queueResponses = (...responses) => {
     let index = 0;
     requestSpy.mockImplementation((options, callback) => {
       const req = new EventEmitter();
-      req.end = jest.fn(() => {
-        const response = responses[index++];
-        if (response.timeout) {
-          process.nextTick(() => req.emit('timeout'));
-          return;
-        }
-        if (response.error) {
-          process.nextTick(() => req.emit('error', response.error));
-          return;
-        }
-        const res = new EventEmitter();
-        res.statusCode = response.statusCode;
-        callback(res);
-        process.nextTick(() => {
-          if (response.body !== undefined) res.emit('data', response.body);
-          res.emit('end');
-        });
-      });
+      req.end = jest.fn(() => emitResponse(req, callback, responses[index++]));
       req.destroy = jest.fn();
       return req;
     });

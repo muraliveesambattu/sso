@@ -45,8 +45,8 @@ describe('sso.routes', () => {
     const updateFlag = jest.fn();
 
     jest.doMock('express', () => expressMock);
-    jest.doMock('../src/controllers/domianCheck.Controller', () => ({ domainCheck }));
-    jest.doMock('../src/controllers/samlCallback.Controller', () => ({ samlCallbackController }));
+    jest.doMock('../src/controllers/domainCheck.controller', () => ({ domainCheck }));
+    jest.doMock('../src/controllers/samlCallback.controller', () => ({ samlCallbackController }));
     jest.doMock('../src/controllers/oidcTokenExchange.controller', () => ({ handleOidcCallback }));
     jest.doMock('../src/controllers/oidcRedirect.controller', () => ({ handleOidcRedirect }));
     jest.doMock('../src/controllers/testConnection.controller', () => ({ handleTestConnection }));
