@@ -62,6 +62,33 @@ const resolveUserGroups = async (idTokenClaims, accessToken) => {
   return [];
 };
 
+// Department/job title feed the department/jobtitle JIT mapping sources. The
+// id_token never carries them, so ask Graph — but only when JIT is on AND a
+// mapping actually uses them. Per LLD 8.2 §7a: if the attribute is REQUIRED by a
+// mapping and the Graph call fails, reject the login (the correct role can't be
+// determined). If no dept/jobtitle mapping exists the attribute isn't needed, so
+// a Graph blip must not block valid logins.
+const resolveProfileAttributes = async (ssoIntegration, companyId, accessToken) => {
+  const empty = { department: null, jobTitle: null };
+  if (!ssoIntegration.jit_enabled) return empty;
+
+  const jitMappings  = await getJitMappings(companyId);
+  const needsProfile = jitMappings.some(m =>
+    m.mapping_source === 'department' || m.mapping_source === 'jobtitle');
+  if (!needsProfile) return empty;
+
+  try {
+    return await fetchUserProfileFromGraph(accessToken);
+  } catch (err) {
+    logger.warn('Graph profile fetch failed for a required department/jobtitle mapping — rejecting login', {
+      action: 'graph_profile_failed', error: err.message,
+    });
+    const e = new Error('Failed to retrieve required user profile attributes from Microsoft Graph');
+    e.statusCode = 502; e.code = 'GRAPH_PROFILE_FETCH_FAILED';
+    throw e;
+  }
+};
+
 const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, clientIp) => {
   try {
     const startTime = Date.now();
@@ -122,32 +149,8 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     logger.debug('Step 7.5 OK: Tenant validated', { action: 'step_tenant', stored: storedTenantId });
 
     // Step 8 — Resolve groups + identity
-    const groups = await resolveUserGroups(idTokenClaims, tokens.access_token);
-
-    // Department/job title feed the department/jobtitle JIT mapping sources.
-    // The id_token never carries them, so ask Graph — but only when JIT is on
-    // AND a mapping actually uses them. Per LLD 8.2 §7a: if the attribute is
-    // REQUIRED by a mapping and the Graph call fails, reject the login (the
-    // correct role can't be determined). If no dept/jobtitle mapping exists the
-    // attribute isn't needed, so a Graph blip must not block valid logins.
-    let profile = { department: null, jobTitle: null };
-    if (ssoIntegration.jit_enabled) {
-      const jitMappings = await getJitMappings(companyId);
-      const needsProfile = jitMappings.some(m =>
-        m.mapping_source === 'department' || m.mapping_source === 'jobtitle');
-      if (needsProfile) {
-        try {
-          profile = await fetchUserProfileFromGraph(tokens.access_token);
-        } catch (err) {
-          logger.warn('Graph profile fetch failed for a required department/jobtitle mapping — rejecting login', {
-            action: 'graph_profile_failed', error: err.message,
-          });
-          const e = new Error('Failed to retrieve required user profile attributes from Microsoft Graph');
-          e.statusCode = 502; e.code = 'GRAPH_PROFILE_FETCH_FAILED';
-          throw e;
-        }
-      }
-    }
+    const groups  = await resolveUserGroups(idTokenClaims, tokens.access_token);
+    const profile = await resolveProfileAttributes(ssoIntegration, companyId, tokens.access_token);
 
     const enrichedClaims = {
       ...idTokenClaims,
