@@ -171,6 +171,28 @@ const getRolePermissionStrings = async (companyId, roleName) => {
   }
 };
 
+/**
+ * Reads a tenant's `friendlyId` from its Firestore `tenants/{companyId}` doc —
+ * the short display alias the console shows as "Company ID". Native ZDNA logins
+ * mint this claim (see zdna-functions phoenixIdentity.getAdditionalClaims);
+ * this mirrors it so SSO-provisioned users under the same company show the
+ * identical value instead of a blank Company ID. Best-effort: never throws,
+ * never blocks login on a cosmetic claim.
+ *
+ * @param {string} companyId  tenant id (Firestore `tenants` doc)
+ * @returns {Promise<string|null>}
+ */
+const getTenantFriendlyId = async (companyId) => {
+  if ((!FIREBASE_CONFIGURED && !RUNNING_IN_FIREBASE) || !companyId) return null;
+  try {
+    const snap = await admin.firestore().collection('tenants').doc(String(companyId)).get();
+    return snap.exists ? (snap.data()?.friendlyId ?? null) : null;
+  } catch (err) {
+    logger.warn(`[FIREBASE] friendlyId lookup failed (non-fatal) | tenant: ${companyId} | ${err.message}`);
+    return null;
+  }
+};
+
 const generateCustomToken = async (zdnaTenantId, claims) => {
   try {
     logger.debug(`[FIREBASE] Generating custom token | uid (zdnaTenantId): ${zdnaTenantId} | email: ${claims.email} | role: ${claims.role}`);
@@ -216,6 +238,7 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
       identity:    zdnaTenantId,      // required by AuthProvider for ADMIN_PERMISSION_TYPE path
       loginType:   'entra',           // distinguishes from PingFederate (v2)
       companyId:   claims.companyId,
+      friendlyId:  claims.friendlyId ?? null,  // "Company ID" alias — parity with native login
       displayName: claims.displayName || '',
       // Full RBAC picture — `role` above only carries roles[0] and gets
       // remapped by the console's AuthProvider; these two claims preserve
@@ -256,4 +279,4 @@ const verifyIdToken = async (idToken) => {
   return admin.auth().verifyIdToken(idToken);
 };
 
-module.exports = { generateCustomToken, verifyIdToken, writeUserPermissions, getRolePermissionStrings, transformRolePermissions };
+module.exports = { generateCustomToken, verifyIdToken, writeUserPermissions, getRolePermissionStrings, transformRolePermissions, getTenantFriendlyId };

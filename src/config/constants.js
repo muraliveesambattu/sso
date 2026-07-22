@@ -54,12 +54,17 @@ const defaults = {
   FRONTEND_URL:      process.env.FRONTEND_URL      || 'http://localhost:3000',
 };
 
-// Guard: in production, redirect/frontend URLs must be HTTPS. The localhost
-// http:// literals above are dev-only fallbacks — if they leak into a prod
-// deploy (env var left unset) fail fast rather than run with an insecure scheme.
+// Guard: in production, redirect/frontend URLs should be HTTPS (Entra rejects
+// non-HTTPS OIDC redirect URIs; cookies/PKCE assume TLS). The localhost http://
+// literals above are dev-only fallbacks. If they leak into a prod deploy (env
+// var left unset) we log a loud warning — but do NOT throw: a URL misconfig must
+// not crash the whole container at startup (health/SAML/admin) and fail deploys.
 const assertSecureUrl = (name, value) => {
   if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(value || '')) {
-    throw new Error(`Insecure URL for ${name} in production: ${value}. Use HTTPS.`);
+    // Lazy require — logger has no dependency on constants, so there's no cycle.
+    require('./logger').logger.warn('Insecure URL configured in production — set it to HTTPS', {
+      action: 'insecure_url_config', name, value,
+    });
   }
 };
 assertSecureUrl('OIDC_REDIRECT_URI', defaults.OIDC_REDIRECT_URI);

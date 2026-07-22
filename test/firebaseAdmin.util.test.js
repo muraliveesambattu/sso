@@ -2,6 +2,7 @@ const loadFirebaseUtil = ({
   env = {},
   adminApps = [],
   createCustomTokenImpl,
+  tenantDoc,            // controls what a Firestore doc .get() resolves to
 } = {}) => {
   jest.resetModules();
 
@@ -20,11 +21,13 @@ const loadFirebaseUtil = ({
 
   // Chainable Firestore mock: collection().doc().collection().doc().set()
   const permissionSet = jest.fn(async () => undefined);
+  const tenantGet = jest.fn(async () => (tenantDoc || { exists: false, data: () => ({}) }));
   const firestorePath = [];
   const chain = {
     collection: jest.fn((c) => { firestorePath.push(['collection', c]); return chain; }),
     doc: jest.fn((d) => { firestorePath.push(['doc', d]); return chain; }),
     set: permissionSet,
+    get: tenantGet,
   };
   const firestore = jest.fn(() => chain);
 
@@ -39,8 +42,8 @@ const loadFirebaseUtil = ({
     credential: { cert },
   }));
 
-  const { generateCustomToken, transformRolePermissions } = require('../src/utils/firebase/firebaseAdmin.util');
-  return { generateCustomToken, transformRolePermissions, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, firestorePath } };
+  const { generateCustomToken, transformRolePermissions, getTenantFriendlyId } = require('../src/utils/firebase/firebaseAdmin.util');
+  return { generateCustomToken, transformRolePermissions, getTenantFriendlyId, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, tenantGet, firestorePath } };
 };
 
 describe('firebaseAdmin.util', () => {
@@ -128,6 +131,7 @@ describe('firebaseAdmin.util', () => {
       identity: 'user-2',
       loginType: 'entra',
       companyId: 'company-2',
+      friendlyId: null,
       displayName: 'User Two',
       zdnaRoles: [
         { id: 'role-manager', name: 'Manager' },
@@ -136,6 +140,51 @@ describe('firebaseAdmin.util', () => {
       zdnaPermissions: ['my_devices:editable', 'licensing:editable'],
     });
     expect(token).toBe('firebase-token');
+  });
+
+  const FIREBASE_ENV = {
+    FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
+    FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
+    FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+  };
+
+  test('propagates a provided friendlyId into the token claims (SSO parity with native login)', async () => {
+    const { generateCustomToken, adminMock } = loadFirebaseUtil({ env: FIREBASE_ENV });
+
+    await generateCustomToken('user-3', {
+      email: 'user3@example.com',
+      role: 'Admin',
+      companyId: 'company-3',
+      friendlyId: 'ad954a56',
+      displayName: 'User Three',
+    });
+
+    expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-3',
+      expect.objectContaining({ friendlyId: 'ad954a56', companyId: 'company-3' }));
+  });
+
+  test('getTenantFriendlyId reads friendlyId from the tenants/{companyId} doc', async () => {
+    const { getTenantFriendlyId, adminMock } = loadFirebaseUtil({
+      env: FIREBASE_ENV,
+      tenantDoc: { exists: true, data: () => ({ friendlyId: 'ad954a56' }) },
+    });
+
+    expect(await getTenantFriendlyId('company-3')).toBe('ad954a56');
+    expect(adminMock.firestore().collection).toHaveBeenCalledWith('tenants');
+  });
+
+  test('getTenantFriendlyId returns null when the tenant doc is missing or has no friendlyId', async () => {
+    const missing = loadFirebaseUtil({ env: FIREBASE_ENV, tenantDoc: { exists: false, data: () => ({}) } });
+    expect(await missing.getTenantFriendlyId('company-x')).toBeNull();
+
+    const noField = loadFirebaseUtil({ env: FIREBASE_ENV, tenantDoc: { exists: true, data: () => ({}) } });
+    expect(await noField.getTenantFriendlyId('company-y')).toBeNull();
+  });
+
+  test('getTenantFriendlyId returns null in dev mode (Firebase not configured) without touching Firestore', async () => {
+    const { getTenantFriendlyId, adminMock } = loadFirebaseUtil();
+    expect(await getTenantFriendlyId('company-3')).toBeNull();
+    expect(adminMock.tenantGet).not.toHaveBeenCalled();
   });
 
   test('prefers pre-resolved permissions over the zdna_roles union', async () => {

@@ -10,7 +10,7 @@ const { exchangeCodeForTokens, decodeJwt, generateJwtAssertion } = require('../.
 const { fetchUserGroupsFromGraph, fetchUserProfileFromGraph } = require('../../utils/oidc/GraphApi.utils');
 const { resolveUser }                             = require('../SSO/userResolution.service');
 const { resolvePermissions }                      = require('../SSO/permissionResolver.service');
-const { generateCustomToken }                     = require('../../utils/firebase/firebaseAdmin.util');
+const { generateCustomToken, getTenantFriendlyId } = require('../../utils/firebase/firebaseAdmin.util');
 const { logger }                                  = require('../../config/logger');
 const { microsoft }                               = require('../../config/constants');
 const { resolveSecret }                           = require('../../utils/crypto.util');
@@ -187,12 +187,16 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
 
     // Step 10 — Generate Firebase Custom Token
     const zdnaTenantId = resolution.user.user_id;
+    // Mirror the native login's "Company ID" alias so SSO users show the same
+    // friendlyId as the owner tenant (companyId === owner tenant here).
+    const friendlyId   = await getTenantFriendlyId(companyId);
     const customToken  = await generateCustomToken(zdnaTenantId, {
       email:       userClaims.email,
       role:        resolution.roles[0]?.role_name || 'user',
       roles:       resolution.roles,
       permissions: resolvedPerms.permissions,
       companyId,
+      friendlyId,
       displayName: userClaims.name || userClaims.preferred_username || '',
     });
     logger.debug('Step 10 OK: Firebase token generated', { action: 'step_firebase' });
