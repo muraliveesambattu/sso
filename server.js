@@ -74,6 +74,7 @@ app.use(express.urlencoded({ extended: false, limit: '50kb' }));
 const DEFAULT_ORIGINS = [
   'https://zdna-sso.web.app',
   'https://dnacloud-demo2-t.web.app',
+  'https://emc-mdnacloud-demo-t.web.app',  // EMC frontend — baked in so an env wipe (CLIENT_URL dropped on deploy) can't CORS-block it
 ];
 const clientOrigins  = (process.env.CLIENT_URL || '').split(',').map(o => o.trim()).filter(Boolean);
 const allowedOrigins = [...new Set([...DEFAULT_ORIGINS, ...clientOrigins])];

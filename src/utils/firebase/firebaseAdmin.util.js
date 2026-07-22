@@ -14,6 +14,7 @@
 
 const admin = require('firebase-admin');
 const { logger } = require('../../config/logger');
+const { permissions } = require('../../config/constants');
 
 const FIREBASE_CONFIGURED =
   process.env.FIREBASE_PROJECT_ID &&
@@ -103,38 +104,15 @@ const writeUserPermissions = async (companyId, uId, permissions) => {
   }
 };
 
-// Canonical role-config translation, mirroring zdna-functions
-// transformPermissions. A role's Firestore config stores per-feature access
-// levels ({'My Services':'No Access', ...}); the console enforces on
-// permissionString entries. This converts one into the other so SSO users can
-// inherit their JIT-assigned role's permissions WITHOUT a per-user RMS mapping.
-const FEATURE_PREFIX = {
-  'My Devices': 'zdna.myDevice',
-  'New Device Setup': 'zdna.initialSetupNew',
-  'Design Studio': 'zdna.designStudio',
-  'Users': 'zdna.userManagement',
-  'Device Settings': 'zdna.deviceSettings',
-  'Licensing': 'zdna.licensing',
-  'Android Updates': 'zdna.androidUpdates',
-  'Device Users': 'zdna.deviceUsers',
-  'My Apps': 'zdna.myApps',
-  'Roles': 'zdna.roleManagement',
-  'My Services': 'zdna.myServices',
-  'My Profile': 'zdna.userProfile',
-  'Remote Rxlogger': 'zdna.remoteRxLogger',
-  'Profile Dependency': 'zdna.profileDependency',
-};
-const LEVEL_ACTION = {
-  'Editable': 'edit',
-  'View Only': 'view',
-  'No Access': 'noaccess',
-  'View With Remote Control': 'remotesupport.edit',
-};
+// Canonical role-config translation, mirroring zdna-functions transformPermissions.
+// The FEATURE_PREFIX / LEVEL_ACTION taxonomy is the single source of truth in
+// config/constants.js (must match the console; identical across all envs).
+const { BASE_GRANT, FEATURE_PREFIX, LEVEL_ACTION } = permissions;
 
 // permObj: { 'My Services': 'No Access', ... } → [{permissionString: 'zdna.all'}, {permissionString: 'zdna.myServices.noaccess'}, ...]
 // Enforcement only reads permissionString (not permissionId), so we omit ids.
 const transformRolePermissions = (permObj = {}) => ([
-  { permissionString: 'zdna.all' },
+  { permissionString: BASE_GRANT },
   ...Object.entries(permObj)
     .filter(([feature, level]) => FEATURE_PREFIX[feature] && LEVEL_ACTION[level])
     .map(([feature, level]) => ({ permissionString: `${FEATURE_PREFIX[feature]}.${LEVEL_ACTION[level]}` })),

@@ -70,4 +70,43 @@ const assertSecureUrl = (name, value) => {
 assertSecureUrl('OIDC_REDIRECT_URI', defaults.OIDC_REDIRECT_URI);
 assertSecureUrl('FRONTEND_URL', defaults.FRONTEND_URL);
 
-module.exports = { microsoft, defaults, MS_LOGIN_BASE, MS_GRAPH_BASE, MS_STS_BASE, assertSecureUrl };
+// ── RBAC permission taxonomy ──────────────────────────────────────────────────
+// Canonical role-config translation, mirroring zdna-functions transformPermissions.
+// A role's Firestore config stores per-feature access levels
+// ({ 'My Services': 'No Access', ... }); the console enforces on permissionString
+// entries. These maps convert one into the other so an SSO user inherits their
+// JIT-assigned role's permissions WITHOUT a per-user RMS mapping.
+// NOTE: these are a fixed domain taxonomy — they MUST match the console /
+// zdna-functions and are identical across every environment, so they live here as
+// constants, NOT in .env (env values are per-environment/secret and get wiped on
+// deploy; this taxonomy must never drift).
+const permissions = {
+  // Always-present base grant prepended to every resolved permission list.
+  BASE_GRANT: 'zdna.all',
+  // Console feature name → permissionString prefix.
+  FEATURE_PREFIX: {
+    'My Devices':         'zdna.myDevice',
+    'New Device Setup':   'zdna.initialSetupNew',
+    'Design Studio':      'zdna.designStudio',
+    'Users':              'zdna.userManagement',
+    'Device Settings':    'zdna.deviceSettings',
+    'Licensing':          'zdna.licensing',
+    'Android Updates':    'zdna.androidUpdates',
+    'Device Users':       'zdna.deviceUsers',
+    'My Apps':            'zdna.myApps',
+    'Roles':              'zdna.roleManagement',
+    'My Services':        'zdna.myServices',
+    'My Profile':         'zdna.userProfile',
+    'Remote Rxlogger':    'zdna.remoteRxLogger',
+    'Profile Dependency': 'zdna.profileDependency',
+  },
+  // Access level → permissionString action suffix.
+  LEVEL_ACTION: {
+    'Editable':                 'edit',
+    'View Only':                'view',
+    'No Access':                'noaccess',
+    'View With Remote Control': 'remotesupport.edit',
+  },
+};
+
+module.exports = { microsoft, defaults, permissions, MS_LOGIN_BASE, MS_GRAPH_BASE, MS_STS_BASE, assertSecureUrl };
