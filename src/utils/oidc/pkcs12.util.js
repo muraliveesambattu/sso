@@ -137,6 +137,10 @@ const extractFromPkcs12 = async (base64Pfx, password) => {
     .filter(line => !line.startsWith('-----') && line.trim())
     .join('');
   const certDer       = Buffer.from(certBase64, 'base64');
+  // SHA-1 is the X.509 certificate *thumbprint* standard used by Microsoft Entra
+  // (the `x5t` header value in private_key_jwt client assertions). It's an
+  // identifier for interop, NOT a security hash (no signing/integrity/secret
+  // hashing here), so SHA-1 is required and safe. NOSONAR
   const thumbprintHex = crypto.createHash('sha1').update(certDer).digest('hex').toUpperCase();
 
   return {

@@ -119,7 +119,11 @@ const handleCreateUser = async (req, res, next) => {
     if (!company_id || !email) {
       throw httpError('company_id and email are required', 400, 'MISSING_REQUIRED_FIELDS');
     }
-    if (!EMAIL_RE.test(email)) throw httpError('Invalid email format', 400, 'INVALID_EMAIL');
+    // Bound the input before the regex: emails are max 254 chars (RFC 5321), and a
+    // fixed upper bound makes EMAIL_RE run in constant time — no ReDoS on user input.
+    if (typeof email !== 'string' || email.length > 254 || !EMAIL_RE.test(email)) {
+      throw httpError('Invalid email format', 400, 'INVALID_EMAIL');
+    }
 
     const integration = await ssoDataService.getSsoIntegrationByCompanyId(company_id);
     if (!integration) {

@@ -89,6 +89,20 @@ const resolveProfileAttributes = async (ssoIntegration, companyId, accessToken) 
   }
 };
 
+// Cross-validates the token's tenant (tid) against the stored integration.
+// Extracted from oidcTokenExchangeService to keep its cognitive complexity in
+// check (S3776): the multi-branch tenant rule lives here, not in the pipeline.
+const assertTenantMatches = (storedTenantId, tokenTenantId) => {
+  const ok =
+    storedTenantId === 'common' ||
+    (storedTenantId === 'consumers' && tokenTenantId === CONSUMER_MSA_TENANT) ||
+    storedTenantId === tokenTenantId;
+  if (!ok) {
+    const err = new Error(`Tenant mismatch: token tid=${tokenTenantId}, expected: ${storedTenantId}`);
+    err.statusCode = 401; err.code = 'TENANT_MISMATCH'; throw err;
+  }
+};
+
 const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, clientIp) => {
   try {
     const startTime = Date.now();
@@ -136,16 +150,7 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
 
     // Step 7.5 — Cross-validate tenant
     const storedTenantId = ssoIntegration.entra_tenant_id;
-    const tokenTenantId  = idTokenClaims.tid;
-    const tenantMatches  =
-      storedTenantId === 'common' ||
-      (storedTenantId === 'consumers' && tokenTenantId === CONSUMER_MSA_TENANT) ||
-      storedTenantId === tokenTenantId;
-
-    if (!tenantMatches) {
-      const err = new Error(`Tenant mismatch: token tid=${tokenTenantId}, expected: ${storedTenantId}`);
-      err.statusCode = 401; err.code = 'TENANT_MISMATCH'; throw err;
-    }
+    assertTenantMatches(storedTenantId, idTokenClaims.tid);
     logger.debug('Step 7.5 OK: Tenant validated', { action: 'step_tenant', stored: storedTenantId });
 
     // Step 8 — Resolve groups + identity
