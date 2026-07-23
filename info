@@ -1,0 +1,4 @@
+
+SSO_BASE_URL=https://sso-323173671147.us-central1.run.app
+
+firebase deploy --only functions:ssoGateway --project emc-mdnacloud-demo-t
