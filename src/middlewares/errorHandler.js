@@ -46,6 +46,7 @@ const SAFE_MESSAGES = {
   INVALID_MAPPING_SOURCE:   'Unsupported mapping type. Use group, department, jobtitle, role, or default.',
   MISSING_MAPPING_VALUE:    'A value to match against is required for this mapping type.',
   JIT_NO_MATCHING_ROLE:     'Your account is not assigned a role for SSO access. Please contact your administrator.',
+  NO_PERMISSIONS:           'Your account has no access permissions. Please contact your administrator.',
   GRAPH_PROFILE_FETCH_FAILED: 'Unable to verify your profile with Microsoft. Please try again.',
   MISSING_ID_TOKEN:         'Authentication required. Please sign in and try again.',
   INVALID_ID_TOKEN:         'Your session is invalid or expired. Please sign in again.',

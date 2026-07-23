@@ -266,6 +266,16 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   // Resolve permissions (RMS when configured, else zdna_roles)
   const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
 
+  // Fail-closed authorization gate: deny a user who resolves to ZERO permissions
+  // (an empty set is default-allow in the console, so admitting them is fail-open).
+  if (!Array.isArray(resolvedPerms.permissions) || resolvedPerms.permissions.length === 0) {
+    logger.warn('[SAML] Login denied — user has no permissions', {
+      action: 'no_permissions_denied', company_id: samlConfig.company_id, email,
+    });
+    const err = new Error('User has no permissions assigned');
+    err.statusCode = 403; err.code = 'NO_PERMISSIONS'; throw err;
+  }
+
   // Mirror the native login's "Company ID" alias for SSO parity.
   const friendlyId = await getTenantFriendlyId(samlConfig.company_id);
 

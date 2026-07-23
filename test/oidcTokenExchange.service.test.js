@@ -77,7 +77,7 @@ describe('oidcTokenExchange.service', () => {
       roles: [{ role_name: 'Admin' }],
       action: 'created',
     });
-    resolvePermissions.mockResolvedValue({ permissions: [], source: 'zdna_roles' });
+    resolvePermissions.mockResolvedValue({ permissions: ['zdna.all'], source: 'zdna_roles' });
     generateCustomToken.mockResolvedValue('firebase-custom-token');
     verifyJwtSignature.mockResolvedValue(undefined);
     generateJwtAssertion.mockReturnValue('signed-assertion');
@@ -164,7 +164,7 @@ describe('oidcTokenExchange.service', () => {
       email: 'user@example.com',
       role: 'Admin',
       roles: [{ role_name: 'Admin' }],
-      permissions: [],
+      permissions: ['zdna.all'],
       companyId: 'company-1',
       friendlyId: null,
       displayName: 'User One',
@@ -192,8 +192,26 @@ describe('oidcTokenExchange.service', () => {
     expect(logger.debug).toHaveBeenCalledWith('Step 9.5 DEBUG: Full resolved permissions', {
       action: 'step_permissions_detail',
       company_id: 'company-1',
-      resolvedPerms: { permissions: [], source: 'zdna_roles' },
+      resolvedPerms: { permissions: ['zdna.all'], source: 'zdna_roles' },
     });
+  });
+
+  test('denies login (403 NO_PERMISSIONS) when the user resolves to zero permissions', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({
+      company_id: 'company-1', protocol: 'oidc', entra_tenant_id: 'tenant-1',
+    });
+    getOidcConfig.mockResolvedValue({
+      client_id: 'client-1', client_auth_method: 'client_secret',
+      client_secret: 'env:OIDC_CLIENT_SECRET_ZDNA', redirect_uri: 'env:OIDC_REDIRECT_URI',
+    });
+    exchangeCodeForTokens.mockResolvedValue({ token_type: 'Bearer', access_token: 'a', id_token: 'id' });
+    decodeJwt.mockReturnValue({ header: { alg: 'RS256' }, payload: { tid: 'tenant-1', email: 'user@example.com' } });
+    resolvePermissions.mockResolvedValue({ permissions: [], source: 'zdna_roles' });
+
+    await expect(
+      oidcTokenExchangeService('code-noperm', 'company-1', null, 'nonce-1', '1.2.3.4')
+    ).rejects.toMatchObject({ statusCode: 403, code: 'NO_PERMISSIONS' });
+    expect(generateCustomToken).not.toHaveBeenCalled();
   });
 
   test('fetches groups from Graph API when group overage claims are present', async () => {

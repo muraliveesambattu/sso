@@ -21,6 +21,10 @@ jest.mock('../src/services/SSO/userResolution.service', () => ({
   resolveUser: jest.fn(),
 }));
 
+jest.mock('../src/services/SSO/permissionResolver.service', () => ({
+  resolvePermissions: jest.fn(),
+}));
+
 jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
   generateCustomToken: jest.fn(),
   getTenantFriendlyId: jest.fn().mockResolvedValue(null),
@@ -39,6 +43,7 @@ const { getSamlConfig } = require('../src/services/db/ssoDataService');
 const { verifyXmlSignature } = require('../src/utils/saml/samlSignature.util');
 const { samlRequestStore } = require('../src/services/Saml/samlAuthRequest.service');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
+const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 const { generateCustomToken } = require('../src/utils/firebase/firebaseAdmin.util');
 const {
   validateStatus,
@@ -104,6 +109,7 @@ describe('samlCallback.service', () => {
       action: 'created',
     });
     generateCustomToken.mockResolvedValue('firebase-saml-token');
+    resolvePermissions.mockResolvedValue({ permissions: ['zdna.all'], source: 'zdna_roles' });
   });
 
   afterEach(() => {
@@ -221,7 +227,7 @@ describe('samlCallback.service', () => {
       email: 'user@example.com',
       role: 'Admin',
       roles: [{ role_name: 'Admin' }],
-      permissions: [],
+      permissions: ['zdna.all'],
       companyId: 'company-1',
       friendlyId: null,
       displayName: 'Test User',
@@ -235,5 +241,18 @@ describe('samlCallback.service', () => {
         sessionAge: 2000,
       }),
     }));
+  });
+
+  test('denies login (403 NO_PERMISSIONS) when the user resolves to zero permissions', async () => {
+    samlRequestStore.get.mockReturnValue({
+      timestamp: fixedNow - 2000,
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+    });
+    resolvePermissions.mockResolvedValueOnce({ permissions: [], source: 'zdna_roles' });
+
+    await expect(
+      processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4')
+    ).rejects.toMatchObject({ statusCode: 403, code: 'NO_PERMISSIONS' });
+    expect(generateCustomToken).not.toHaveBeenCalled();
   });
 });

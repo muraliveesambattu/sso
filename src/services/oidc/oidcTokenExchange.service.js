@@ -190,6 +190,17 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
       resolvedPerms,
     });
 
+    // Step 9.6 — Fail-closed authorization gate: a user who resolves to ZERO
+    // permissions must not be admitted (the console treats an empty permission
+    // set as default-allow, so admitting them would be fail-open). Deny login.
+    if (!Array.isArray(resolvedPerms.permissions) || resolvedPerms.permissions.length === 0) {
+      logger.warn('Login denied — user has no permissions', {
+        action: 'no_permissions_denied', company_id: companyId, email: userClaims.email,
+      });
+      const err = new Error('User has no permissions assigned');
+      err.statusCode = 403; err.code = 'NO_PERMISSIONS'; throw err;
+    }
+
     // Step 10 — Generate Firebase Custom Token
     const zdnaTenantId = resolution.user.user_id;
     // Mirror the native login's "Company ID" alias so SSO users show the same
