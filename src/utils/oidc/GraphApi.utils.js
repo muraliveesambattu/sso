@@ -29,7 +29,7 @@ const fetchGraphPage = (accessToken, url) => {
         'Content-Type': 'application/json'
       },
       timeout:            10000,
-      rejectUnauthorized: process.env.NODE_ENV === 'production'
+      rejectUnauthorized: true
     };
 
     const req = https.request(options, (res) => {
@@ -97,7 +97,7 @@ const fetchGraphObject = (accessToken, url) => {
         'Content-Type': 'application/json'
       },
       timeout:            10000,
-      rejectUnauthorized: process.env.NODE_ENV === 'production'
+      rejectUnauthorized: true
     };
     const req = https.request(options, (res) => {
       let data = '';

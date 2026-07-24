@@ -20,7 +20,7 @@ const fetchJwks = (tenantId) => {
     const url = microsoft.jwksUrl(tenantId);
 
     const options = {
-      rejectUnauthorized: process.env.NODE_ENV === 'production',
+      rejectUnauthorized: true,
       timeout: JWKS_TIMEOUT_MS,
     };
 

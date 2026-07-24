@@ -4,7 +4,7 @@
  */
 
 const { oidcTokenExchangeService } = require('../services/oidc/oidcTokenExchange.service');
-const { stateStore }    = require('../services/SSO/domainCheck.service');
+const { stateStore }    = require('../config/stateStore');
 const { logger }        = require('../config/logger');
 const { auditUserLogin } = require('../services/audit/audit.service');
 

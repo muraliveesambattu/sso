@@ -128,7 +128,6 @@ const buildOidcResponse = async (config) => {
 
   const storeEntry = {
     nonce,
-    company_id: config.company_id,
     createdAt:  Date.now(),
   };
 
@@ -239,4 +238,4 @@ const checkDomain = async (email, domain, session, sessionID) => {
   return await buildOidcResponse(config);
 };
 
-module.exports = { checkDomain, stateStore, OIDC_TTL_MS };
+module.exports = { checkDomain, OIDC_TTL_MS };

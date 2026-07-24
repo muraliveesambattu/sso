@@ -96,7 +96,7 @@ const generateJwtAssertion = (clientId, tenantId, privateKeyEnc, thumbprint) => 
  *
  * - No retry logic — auth codes are single-use
  * - 10-second timeout
- * - rejectUnauthorized: true in production (never disable TLS verification)
+ * - rejectUnauthorized: true always (never disable TLS verification)
  */
 const exchangeCodeForTokens = (code, clientId, authMethod, authCredential, redirectUri, tokenEndpoint) => {
   return new Promise((resolve, reject) => {
@@ -114,7 +114,7 @@ const exchangeCodeForTokens = (code, clientId, authMethod, authCredential, redir
           'Content-Length': Buffer.byteLength(postBody)
         },
         timeout:             10000,
-        rejectUnauthorized:  process.env.NODE_ENV === 'production'
+        rejectUnauthorized:  true
       };
 
       const req = https.request(options, (res) => {

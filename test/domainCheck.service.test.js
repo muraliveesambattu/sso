@@ -162,7 +162,6 @@ describe('domainCheck.service', () => {
       result.config.state,
       expect.objectContaining({
         nonce: result.config.nonce,
-        company_id: 'company-1',
         code_verifier: expect.any(String),
         createdAt: expect.any(Number),
       }),

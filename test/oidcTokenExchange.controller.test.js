@@ -2,7 +2,7 @@ jest.mock('../src/services/oidc/oidcTokenExchange.service', () => ({
   oidcTokenExchangeService: jest.fn(),
 }));
 
-jest.mock('../src/services/SSO/domainCheck.service', () => ({
+jest.mock('../src/config/stateStore', () => ({
   stateStore: {
     get: jest.fn(),
     del: jest.fn(),
@@ -19,7 +19,7 @@ jest.mock('../src/services/audit/audit.service', () => ({
 
 const { handleOidcCallback } = require('../src/controllers/oidcTokenExchange.controller');
 const { oidcTokenExchangeService } = require('../src/services/oidc/oidcTokenExchange.service');
-const { stateStore } = require('../src/services/SSO/domainCheck.service');
+const { stateStore } = require('../src/config/stateStore');
 const { auditUserLogin } = require('../src/services/audit/audit.service');
 
 const mockReq = (body = {}) => ({
