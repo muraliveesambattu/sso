@@ -16,11 +16,6 @@ module.exports = {
         type:      Sequelize.STRING(60),
         allowNull: false,
       },
-      domains: {
-        type:      Sequelize.STRING(100),
-        allowNull: false,
-        unique:    true,
-      },
       protocol: {
         type:      Sequelize.STRING(10),
         allowNull: false,
@@ -45,12 +40,6 @@ module.exports = {
         allowNull: false,
         defaultValue: Sequelize.literal('NOW()'),
       },
-    });
-
-    // Index for fast domain lookups (most frequent query)
-    await queryInterface.addIndex('sso_integrations', ['domains'], {
-      name:   'idx_sso_integrations_domains',
-      unique: true,
     });
 
     await queryInterface.addIndex('sso_integrations', ['sso_status'], {

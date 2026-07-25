@@ -28,7 +28,8 @@
  *           example:
  *             protocol: oidc
  *             idp: microsoft_entra
- *             domains: gmail-local.com
+ *             domains:
+ *               - gmail-local.com
  *             tenant_id: 00000000-0000-0000-0000-000000000000
  *             client_id: 11111111-1111-1111-1111-111111111111
  *             auth_method: client_secret_post

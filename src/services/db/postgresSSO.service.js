@@ -13,6 +13,7 @@ const { logger } = require('../../config/logger');
 const { defaults } = require('../../config/constants');
 const {
   SsoIntegration,
+  SsoDomain,
   OidcConfiguration,
   SamlConfiguration,
   ZdnaRole,
@@ -34,12 +35,26 @@ const resolveEnvRef = (val) => {
 // ── sso_integrations ──────────────────────────────────────────────────────────
 
 const getSsoIntegrationByDomain = async (domain) => {
-  logger.debug(`[POSTGRES] Query sso_integrations | domain: ${domain}`);
+  logger.debug(`[POSTGRES] Query sso_domains | domain: ${domain}`);
+  const domainRow = await SsoDomain.findOne({ where: { domain: domain.toLowerCase() } });
+  if (!domainRow) {
+    logger.debug('[POSTGRES] sso_domains result | found: false');
+    return null;
+  }
   const row = await SsoIntegration.findOne({
-    where: { domains: domain.toLowerCase(), sso_status: 'active' },
+    where: { company_id: domainRow.company_id, sso_status: 'active' },
   });
   logger.debug(`[POSTGRES] sso_integrations result | found: ${!!row} | protocol: ${row?.protocol || '-'}`);
   return row ? row.toJSON() : null;
+};
+
+// All verified domains for a company, as a lowercased string array.
+const getDomainsByCompanyId = async (companyId) => {
+  const rows = await SsoDomain.findAll({
+    where: { company_id: companyId },
+    order: [['id', 'ASC']],
+  });
+  return rows.map(r => r.domain);
 };
 
 // One Entra tenant should not be claimed by two different organisations —
@@ -189,33 +204,48 @@ const saveSsoConfig = async ({
   keep_existing_cert,
   jit_enabled, jit_mappings,
 }) => {
+  const domainList = (Array.isArray(domains) ? domains : [domains])
+    .map(d => String(d).toLowerCase());
+  const sameDomainSet = (a, b) =>
+    a.length === b.length && a.every(d => b.includes(d));
+
   const sequelize = require('../../config/db');
   const tx = await sequelize.transaction();
   try {
-    // 1a — if this owner already has a config on a DIFFERENT domain, delete it first.
-    //      Enforces one SSO config per owner_tenant_id — prevents ghost rows where
-    //      the same admin owns multiple tenants after re-configuring.
+    // 1a — if this owner already has a config on a DIFFERENT domain set, delete it
+    //      first. Enforces one SSO config per owner_tenant_id — prevents ghost rows
+    //      where the same admin owns multiple tenants after re-configuring.
     if (owner_tenant_id) {
       const ownerExisting = await SsoIntegration.findOne({
         where: { owner_tenant_id },
         transaction: tx,
       });
-      if (ownerExisting && ownerExisting.domains !== domains.toLowerCase()) {
-        const oldCid = ownerExisting.company_id;
-        logger.info(`[POSTGRES] Owner already has config on ${ownerExisting.domains} — removing before save | old_company_id: ${oldCid}`, { action: 'owner_config_replaced' });
-        await JitMapping.destroy({ where: { company_id: oldCid }, transaction: tx });
-        await OidcConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
-        await SamlConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
-        await SsoIntegration.destroy({ where: { company_id: oldCid }, transaction: tx });
+      if (ownerExisting) {
+        const ownerDomains = (await SsoDomain.findAll({
+          where: { company_id: ownerExisting.company_id },
+          transaction: tx,
+        })).map(d => d.domain);
+        if (!sameDomainSet(ownerDomains, domainList)) {
+          const oldCid = ownerExisting.company_id;
+          logger.info(`[POSTGRES] Owner already has config on ${ownerDomains.join(', ')} — removing before save | old_company_id: ${oldCid}`, { action: 'owner_config_replaced' });
+          await JitMapping.destroy({ where: { company_id: oldCid }, transaction: tx });
+          await OidcConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
+          await SamlConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
+          await SsoDomain.destroy({ where: { company_id: oldCid }, transaction: tx });
+          await SsoIntegration.destroy({ where: { company_id: oldCid }, transaction: tx });
+        }
       }
     }
 
-    // 1b — check if domain already exists
-    const existing = await SsoIntegration.findOne({
-      where: { domains: domains.toLowerCase() },
+    // 1b — check if any incoming domain already belongs to an integration
+    const existingDomain = await SsoDomain.findOne({
+      where: { domain: { [Op.in]: domainList } },
       transaction: tx,
     });
-    // Reject if a DIFFERENT owner already owns this domain
+    const existing = existingDomain
+      ? await SsoIntegration.findOne({ where: { company_id: existingDomain.company_id }, transaction: tx })
+      : null;
+    // Reject if a DIFFERENT owner already owns one of these domains
     if (existing && owner_tenant_id && existing.owner_tenant_id && existing.owner_tenant_id !== owner_tenant_id) {
       const conflictErr = new Error('Domain is already configured by another organisation');
       conflictErr.statusCode = 409;
@@ -231,11 +261,17 @@ const saveSsoConfig = async ({
       entra_tenant_id: entra_tenant_id || tenant_id || null,
       owner_tenant_id:    owner_tenant_id || null,
       owner_company_name: owner_company_name || null,
-      domains:         domains.toLowerCase(),
       protocol,
       sso_status:      'active',
       jit_enabled:     !!jit_enabled,
     }, { transaction: tx });
+
+    // replace the company's domain rows with the incoming set
+    await SsoDomain.destroy({ where: { company_id }, transaction: tx });
+    await SsoDomain.bulkCreate(
+      domainList.map(domain => ({ company_id, domain })),
+      { transaction: tx },
+    );
 
     // 2 — upsert protocol-specific config
     if (protocol === 'oidc') {
@@ -322,7 +358,10 @@ const getSsoConfigDetails = async ({ company_id, domain, owner_tenant_id }) => {
   if (company_id) {
     integration = await SsoIntegration.findOne({ where: { company_id } });
   } else if (domain) {
-    integration = await SsoIntegration.findOne({ where: { domains: domain.toLowerCase() } });
+    const domainRow = await SsoDomain.findOne({ where: { domain: domain.toLowerCase() } });
+    if (domainRow) {
+      integration = await SsoIntegration.findOne({ where: { company_id: domainRow.company_id } });
+    }
   } else if (owner_tenant_id) {
     // Look up the config the given admin (tenant) configured, so on next login
     // we can show them their own SSO setup.
@@ -333,11 +372,16 @@ const getSsoConfigDetails = async ({ company_id, domain, owner_tenant_id }) => {
   const intData = integration.toJSON();
   const cid     = intData.company_id;
 
-  const [oidcRow, samlRow, jitRows] = await Promise.all([
+  const [oidcRow, samlRow, jitRows, domainRows] = await Promise.all([
     OidcConfiguration.findOne({ where: { company_id: cid } }),
     SamlConfiguration.findOne({ where: { company_id: cid } }),
     JitMapping.findAll({ where: { company_id: cid }, order: [['priority', 'ASC']] }),
+    SsoDomain.findAll({ where: { company_id: cid }, order: [['id', 'ASC']] }),
   ]);
+
+  // Domains now live in their own table — surface them as an array on the
+  // integration so the console renders the full set (frontend sends an array).
+  intData.domains = domainRows.map(d => d.domain);
 
   const oidc = oidcRow ? oidcRow.toJSON() : null;
   if (oidc) {
@@ -386,6 +430,7 @@ const deleteSsoConfig = async (companyId) => {
     await OidcConfiguration.destroy({ where: { company_id: companyId }, transaction: tx });
     await SamlConfiguration.destroy({ where: { company_id: companyId }, transaction: tx });
     await JitMapping.destroy({ where: { company_id: companyId }, transaction: tx });
+    await SsoDomain.destroy({ where: { company_id: companyId }, transaction: tx });
     const count = await SsoIntegration.destroy({ where: { company_id: companyId }, transaction: tx });
     await tx.commit();
     logger.info(`[POSTGRES] SSO config deleted | company_id: ${companyId} | found: ${count > 0}`);
@@ -404,6 +449,7 @@ const invalidateDomainCache = (domain) => {
 
 module.exports = {
   getSsoIntegrationByDomain,
+  getDomainsByCompanyId,
   getSsoIntegrationByCompanyId,
   getSsoIntegrationByEntraTenantId,
   getOidcConfig,

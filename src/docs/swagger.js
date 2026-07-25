@@ -176,7 +176,7 @@ X-Admin-API-Key: <your-admin-api-key>
           properties: {
             protocol:      { type: 'string', enum: ['oidc', 'saml'], example: 'oidc' },
             idp:           { type: 'string', example: 'microsoft_entra' },
-            domains:       { type: 'string', example: 'gmail-local.com' },
+            domains:       { type: 'array', items: { type: 'string' }, example: ['gmail-local.com'] },
             tenant_id:     { type: 'string', format: 'uuid', example: '00000000-0000-0000-0000-000000000000' },
             client_id:     { type: 'string', format: 'uuid', example: '11111111-1111-1111-1111-111111111111' },
             auth_method:   { type: 'string', enum: ['client_secret_post', 'private_key_jwt', 'none'], example: 'client_secret_post' },

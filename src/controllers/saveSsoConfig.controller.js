@@ -1,16 +1,22 @@
 const { saveSsoConfig }      = require('../services/SSO/saveSsoConfig.service');
 const { logger }             = require('../config/logger');
 const { auditSsoConfigSaved } = require('../services/audit/audit.service');
-const { getSsoIntegrationByEntraTenantId } = require('../services/db/ssoDataService');
+const { getSsoIntegrationByEntraTenantId, getDomainsByCompanyId } = require('../services/db/ssoDataService');
 
 // Trim identifier fields so stray copy-paste whitespace can't corrupt the
 // stored tenant_id / client_id / domain (which break issuer/audience checks
 // and create duplicate rows that differ only by a space).
 const trimStr = (v) => (typeof v === 'string' ? v.trim() : v);
 
-// The frontend sends `domains` as an array (e.g. ["zebra.com"]); the backend
-// works with a single domain string. Take the first entry when it's an array.
-const firstDomain = (v) => (Array.isArray(v) ? v[0] : v);
+// The frontend sends `domains` as an array (e.g. ["zebra.com"]). Normalise to a
+// trimmed, lowercased, de-duplicated array — a company may own many domains.
+const toDomainArray = (v) => {
+  const arr = Array.isArray(v) ? v : (v == null ? [] : [v]);
+  return [...new Set(arr.map(d => trimStr(d)?.toLowerCase()).filter(Boolean))];
+};
+
+// Set equality helper for the tenant-conflict check below.
+const sameDomainSet = (a, b) => a.length === b.length && a.every(d => b.includes(d));
 
 const handleSaveSsoConfig = async (req, res, next) => {
   try {
@@ -19,7 +25,7 @@ const handleSaveSsoConfig = async (req, res, next) => {
       certificate, certificate_password, jit_enabled, jit_mappings,
       keep_existing_cert, sign_auth,
     } = req.body;
-    const domains      = trimStr(firstDomain(req.body.domains))?.toLowerCase();
+    const domains      = toDomainArray(req.body.domains);
     const tenant_id    = trimStr(req.body.tenant_id);
     const client_id    = trimStr(req.body.client_id);
     const redirect_uri = trimStr(req.body.redirect_uri);
@@ -32,17 +38,20 @@ const handleSaveSsoConfig = async (req, res, next) => {
     // An Entra tenant may only be claimed by one organisation — reject if a
     // DIFFERENT org already registered it. The same org re-saving/editing its
     // own config with the same tenant_id is not a conflict. Compared against
-    // `domains` rather than owner_tenant_id/company_id: not every save path
-    // includes owner identity fields (e.g. the JIT-mappings-only quick save
-    // from "Manage roles" omits them entirely), but the verified domain is
-    // always present and is itself the org's unique identity.
+    // the tenant's registered `domains` set rather than owner_tenant_id/company_id:
+    // not every save path includes owner identity fields (e.g. the JIT-mappings-only
+    // quick save from "Manage roles" omits them entirely), but the verified
+    // domains are always present and are themselves the org's unique identity.
     if (tenant_id) {
       const existingTenant = await getSsoIntegrationByEntraTenantId(tenant_id);
-      if (existingTenant && existingTenant.domains !== domains) {
-        throw Object.assign(
-          new Error('This Microsoft Entra tenant ID is already registered by another organization.'),
-          { statusCode: 409, code: 'TENANT_ALREADY_REGISTERED' }
-        );
+      if (existingTenant) {
+        const existingDomains = await getDomainsByCompanyId(existingTenant.company_id);
+        if (!sameDomainSet(existingDomains, domains)) {
+          throw Object.assign(
+            new Error('This Microsoft Entra tenant ID is already registered by another organization.'),
+            { statusCode: 409, code: 'TENANT_ALREADY_REGISTERED' }
+          );
+        }
       }
     }
 

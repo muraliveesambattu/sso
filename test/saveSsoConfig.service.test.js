@@ -198,7 +198,7 @@ describe('saveSsoConfig.service', () => {
 
   test('hands OIDC fields (raw client_secret + jit rows) to the Postgres layer', async () => {
     const { saveSsoConfig, pgSave } = loadService({
-      getByDomainImpl: async () => ({ company_id: 'zdna-Example-COM-1700000000000' }),
+      getByDomainImpl: async () => ({ company_id: 'zdna-example-com-1700000000000' }),
     });
 
     const result = await saveSsoConfig({
@@ -214,9 +214,10 @@ describe('saveSsoConfig.service', () => {
 
     // The service derives company_id + entra_tenant_id and passes the secret
     // through verbatim — encryption/defaults are postgresSSO.service's job.
+    // domains is lowercased and carried as an array (a company may own many).
     expect(savedRow(pgSave)).toEqual(expect.objectContaining({
-      company_id: 'zdna-Example-COM-1700000000000',
-      domains: 'Example.COM',
+      company_id: 'zdna-example-com-1700000000000',
+      domains: ['example.com'],
       protocol: 'oidc',
       entra_tenant_id: 'common',
       client_id: 'client-1',
@@ -230,7 +231,7 @@ describe('saveSsoConfig.service', () => {
     }));
     expect(result).toEqual({
       success: true,
-      company_id: 'zdna-Example-COM-1700000000000',
+      company_id: 'zdna-example-com-1700000000000',
       message: 'SSO configuration saved and activated successfully',
     });
   });
@@ -265,7 +266,7 @@ describe('saveSsoConfig.service', () => {
     });
 
     expect(savedRow(pgSave)).toEqual(expect.objectContaining({
-      domains: 'zebra.com',
+      domains: ['zebra.com'],
       protocol: 'saml',
       entra_tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
       sso_url: 'https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/saml2',
@@ -288,7 +289,7 @@ describe('saveSsoConfig.service', () => {
 
     expect(pgSave).toHaveBeenCalledWith(expect.objectContaining({
       company_id: 'zdna-pg-example-com-1700000000000',
-      domains: 'pg.example.com',
+      domains: ['pg.example.com'],
       client_secret: 'pg-secret',
     }));
     expect(getSsoIntegrationByDomain).toHaveBeenCalledWith('pg.example.com');

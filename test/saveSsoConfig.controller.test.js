@@ -12,12 +12,13 @@ jest.mock('../src/services/audit/audit.service', () => ({
 
 jest.mock('../src/services/db/ssoDataService', () => ({
   getSsoIntegrationByEntraTenantId: jest.fn(),
+  getDomainsByCompanyId: jest.fn(),
 }));
 
 const { handleSaveSsoConfig } = require('../src/controllers/saveSsoConfig.controller');
 const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
 const { auditSsoConfigSaved } = require('../src/services/audit/audit.service');
-const { getSsoIntegrationByEntraTenantId } = require('../src/services/db/ssoDataService');
+const { getSsoIntegrationByEntraTenantId, getDomainsByCompanyId } = require('../src/services/db/ssoDataService');
 
 const mockReq = (body = {}) => ({
   body,
@@ -35,6 +36,7 @@ describe('saveSsoConfig.controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getSsoIntegrationByEntraTenantId.mockResolvedValue(null); // no existing tenant by default
+    getDomainsByCompanyId.mockResolvedValue([]);
   });
 
   test('normalizes fields, saves config, audits it, and returns 201', async () => {
@@ -59,7 +61,7 @@ describe('saveSsoConfig.controller', () => {
     await handleSaveSsoConfig(req, res, next);
 
     expect(saveSsoConfig).toHaveBeenCalledWith(expect.objectContaining({
-      domains: 'example.com',
+      domains: ['example.com'],
       tenant_id: 'tenant-1',
       owner_tenant_id: 'owner-1',
       owner_company_name: 'Example Co',
@@ -93,7 +95,8 @@ describe('saveSsoConfig.controller', () => {
     });
     const res = mockRes();
     const next = jest.fn();
-    getSsoIntegrationByEntraTenantId.mockResolvedValue({ domains: 'someone-else.com' });
+    getSsoIntegrationByEntraTenantId.mockResolvedValue({ company_id: 'other-co' });
+    getDomainsByCompanyId.mockResolvedValue(['someone-else.com']);
 
     await handleSaveSsoConfig(req, res, next);
 
@@ -113,7 +116,8 @@ describe('saveSsoConfig.controller', () => {
     });
     const res = mockRes();
     const next = jest.fn();
-    getSsoIntegrationByEntraTenantId.mockResolvedValue({ domains: 'example.com' });
+    getSsoIntegrationByEntraTenantId.mockResolvedValue({ company_id: 'owner-existing' });
+    getDomainsByCompanyId.mockResolvedValue(['example.com']);
     saveSsoConfig.mockResolvedValue({ success: true, company_id: 'owner-existing' });
 
     await handleSaveSsoConfig(req, res, next);
@@ -141,10 +145,8 @@ describe('saveSsoConfig.controller', () => {
     });
     const res = mockRes();
     const next = jest.fn();
-    getSsoIntegrationByEntraTenantId.mockResolvedValue({
-      company_id: 'noaq1xgCe5otm425Yhk3',
-      domains: 'abc.com',
-    });
+    getSsoIntegrationByEntraTenantId.mockResolvedValue({ company_id: 'noaq1xgCe5otm425Yhk3' });
+    getDomainsByCompanyId.mockResolvedValue(['abc.com']);
     saveSsoConfig.mockResolvedValue({ success: true, company_id: 'noaq1xgCe5otm425Yhk3' });
 
     await handleSaveSsoConfig(req, res, next);

@@ -11,6 +11,12 @@ const loadPostgresService = () => {
     update: jest.fn(),
     destroy: jest.fn(),
   };
+  const SsoDomain = {
+    findOne: jest.fn(),
+    findAll: jest.fn(),
+    destroy: jest.fn(),
+    bulkCreate: jest.fn(),
+  };
   const OidcConfiguration = {
     findOne: jest.fn(),
     upsert: jest.fn(),
@@ -48,6 +54,7 @@ const loadPostgresService = () => {
   }));
   jest.doMock('../src/models', () => ({
     SsoIntegration,
+    SsoDomain,
     OidcConfiguration,
     SamlConfiguration,
     ZdnaRole,
@@ -59,7 +66,7 @@ const loadPostgresService = () => {
   jest.doMock('sequelize', () => ({ Op: { in: Symbol('in') } }));
 
   const service = require('../src/services/db/postgresSSO.service');
-  return { service, mocks: { transaction, sequelizeDb, queryDb, SsoIntegration, OidcConfiguration, SamlConfiguration, ZdnaRole, JitMapping, SsoUser, encrypt, resolveSecret, logger } };
+  return { service, mocks: { transaction, sequelizeDb, queryDb, SsoIntegration, SsoDomain, OidcConfiguration, SamlConfiguration, ZdnaRole, JitMapping, SsoUser, encrypt, resolveSecret, logger } };
 };
 
 describe('postgresSSO.service', () => {
@@ -68,12 +75,22 @@ describe('postgresSSO.service', () => {
     jest.resetModules();
   });
 
-  test('fetches active integrations by domain and normalizes results', async () => {
+  test('fetches active integrations by domain (via sso_domains) and normalizes results', async () => {
     const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'company-1' });
     mocks.SsoIntegration.findOne.mockResolvedValue({ toJSON: () => ({ company_id: 'company-1', protocol: 'oidc' }) });
 
     await expect(service.getSsoIntegrationByDomain('Example.com')).resolves.toEqual({ company_id: 'company-1', protocol: 'oidc' });
-    expect(mocks.SsoIntegration.findOne).toHaveBeenCalledWith({ where: { domains: 'example.com', sso_status: 'active' } });
+    expect(mocks.SsoDomain.findOne).toHaveBeenCalledWith({ where: { domain: 'example.com' } });
+    expect(mocks.SsoIntegration.findOne).toHaveBeenCalledWith({ where: { company_id: 'company-1', sso_status: 'active' } });
+  });
+
+  test('returns null when the domain is not registered in sso_domains', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue(null);
+
+    await expect(service.getSsoIntegrationByDomain('unknown.com')).resolves.toBeNull();
+    expect(mocks.SsoIntegration.findOne).not.toHaveBeenCalled();
   });
 
   test('returns null or empty collections for missing integrations, configs, and roles', async () => {
@@ -140,6 +157,8 @@ describe('postgresSSO.service', () => {
 
   test('saves SSO config in a transaction and commits on success', async () => {
     const { service, mocks } = loadPostgresService();
+    // An incoming domain already belongs to an existing integration → reuse its id.
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
     mocks.SsoIntegration.findOne.mockResolvedValue({ company_id: 'existing-company' });
 
     await service.saveSsoConfig({
@@ -159,9 +178,13 @@ describe('postgresSSO.service', () => {
     expect(mocks.encrypt).toHaveBeenCalledWith('private-key');
     expect(mocks.SsoIntegration.upsert).toHaveBeenCalledWith(expect.objectContaining({
       company_id: 'existing-company',
-      domains: 'example.com',
       protocol: 'oidc',
     }), { transaction: mocks.transaction });
+    // Domains persisted to the child table, not a column on sso_integrations.
+    expect(mocks.SsoDomain.bulkCreate).toHaveBeenCalledWith(
+      [{ company_id: 'existing-company', domain: 'example.com' }],
+      { transaction: mocks.transaction },
+    );
     expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(expect.objectContaining({
       company_id: 'existing-company',
       client_secret_enc: 'enc:secret-1',
@@ -220,9 +243,11 @@ describe('postgresSSO.service', () => {
       toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert' }),
     });
     mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin' }) }]);
+    mocks.SsoDomain.findAll.mockResolvedValue([{ domain: 'example.com' }]);
     mocks.ZdnaRole.findAll.mockResolvedValue([{ toJSON: () => ({ role_id: 'role-admin', role_name: 'Admin' }) }]);
 
     const details = await service.getSsoConfigDetails({ company_id: 'company-1' });
+    expect(details.integration.domains).toEqual(['example.com']);
     expect(details.oidc_config.client_secret_set).toBe(true);
     expect(details.oidc_config.client_secret_enc).toBeUndefined();
     expect(details.saml_config.sp_private_key_enc).toBeUndefined();
@@ -237,16 +262,20 @@ describe('postgresSSO.service', () => {
 
   test('supports domain and owner_tenant_id lookups and no-op cache invalidation', async () => {
     const { service, mocks } = loadPostgresService();
+    // Domain lookup resolves via sso_domains → company_id, then the integration.
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'company-2' });
     mocks.SsoIntegration.findOne
-      .mockResolvedValueOnce({ toJSON: () => ({ company_id: 'company-2', domains: 'domain.example.com' }) })
+      .mockResolvedValueOnce({ toJSON: () => ({ company_id: 'company-2' }) })
       .mockResolvedValueOnce({ toJSON: () => ({ company_id: 'company-3', owner_tenant_id: 'tenant-owner-1' }) });
     mocks.OidcConfiguration.findOne.mockResolvedValue(null);
     mocks.SamlConfiguration.findOne.mockResolvedValue(null);
     mocks.JitMapping.findAll.mockResolvedValue([]);
+    mocks.SsoDomain.findAll.mockResolvedValue([]);
 
     await expect(service.getSsoConfigDetails({ domain: 'DOMAIN.EXAMPLE.COM' })).resolves.toEqual(
       expect.objectContaining({ integration: expect.objectContaining({ company_id: 'company-2' }) })
     );
+    expect(mocks.SsoDomain.findOne).toHaveBeenCalledWith({ where: { domain: 'domain.example.com' } });
     await expect(service.getSsoConfigDetails({ owner_tenant_id: 'tenant-owner-1' })).resolves.toEqual(
       expect.objectContaining({ integration: expect.objectContaining({ company_id: 'company-3' }) })
     );

@@ -16,11 +16,6 @@ const ssoIntegration = sequelize.define('ssoIntegration',
         type:DataTypes.STRING(60),
         allowNull:false,
     },
-    domains : {
-        type:DataTypes.STRING(255),
-        allowNull:false,
-        unique:true,
-    },
     protocol: {
         type: DataTypes.STRING(10),
         allowNull:false,

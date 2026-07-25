@@ -20,12 +20,15 @@ const fieldError = (message, code = 'MISSING_REQUIRED_FIELDS') =>
 // URLs); SAML has no Azure-tenant field, so it requires sso_url instead.
 const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   if (!protocol) throw fieldError('protocol is required', 'MISSING_PROTOCOL');
-  if (!domains)  throw fieldError('domains is required', 'MISSING_DOMAINS');
+  const domainList = Array.isArray(domains) ? domains : (domains ? [domains] : []);
+  if (domainList.length === 0) throw fieldError('domains is required', 'MISSING_DOMAINS');
   if (!ALLOWED_PROTOCOLS.includes(protocol)) {
     throw fieldError(`protocol must be one of: ${ALLOWED_PROTOCOLS.join(', ')}`, 'INVALID_PROTOCOL');
   }
-  if (!DOMAIN_RE.test(domains)) {
-    throw fieldError('domains must be a valid domain name (e.g. example.com)', 'INVALID_DOMAINS');
+  for (const d of domainList) {
+    if (!DOMAIN_RE.test(d)) {
+      throw fieldError('domains must be valid domain names (e.g. example.com)', 'INVALID_DOMAINS');
+    }
   }
   if (protocol === 'oidc') {
     if (!tenant_id) throw fieldError('tenant_id is required for OIDC', 'MISSING_TENANT_ID');
@@ -125,7 +128,9 @@ const stripUrlQuery = (url) => {
 const saveToPostgres = async (proposedCompanyId, fields) => {
   const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
   await pgSave({ company_id: proposedCompanyId, ...fields });
-  const saved = await getSsoIntegrationByDomain(fields.domains);
+  // Re-read via any of the saved domains to learn the actual company_id used
+  // (the store reuses an existing row's id when a domain already existed).
+  const saved = await getSsoIntegrationByDomain(fields.domains[0]);
   const company_id = saved ? saved.company_id : proposedCompanyId;
   logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${company_id}`);
   return company_id;
@@ -136,7 +141,7 @@ const saveToPostgres = async (proposedCompanyId, fields) => {
  *
  * @param {Object} payload
  * @param {'oidc'|'saml'} payload.protocol
- * @param {string}  payload.domains            Company email domain (e.g. zebra.com)
+ * @param {string|string[]} payload.domains    Company email domain(s) (e.g. ["zebra.com"])
  * @param {string}  [payload.idp]
  * @param {string}  [payload.tenant_id]        Azure tenant GUID (required for OIDC)
  * @param {string}  [payload.owner_tenant_id]
@@ -175,6 +180,8 @@ const saveSsoConfig = async (payload) => {
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =
     await extractCert(protocol, auth_method, certificate, certificate_password);
 
+  const domainList = (Array.isArray(domains) ? domains : [domains]).map(d => d.toLowerCase());
+
   // company_id = the configuring admin's tenant id (owner_tenant_id) — the
   // same key deactivate/delete/status use, so one stable id per organisation.
   // Fallback to the legacy zdna-<domain>-<ts> form when no owner is supplied
@@ -182,10 +189,10 @@ const saveSsoConfig = async (payload) => {
   // NOTE: for domains that already exist, the store keeps the row's ORIGINAL
   // company_id regardless of this proposal (edit never re-keys a config).
   const proposedCompanyId =
-    owner_tenant_id || `zdna-${domains.replace(/[.\s]/g, '-')}-${Date.now()}`;
+    owner_tenant_id || `zdna-${domainList[0].replace(/[.\s]/g, '-')}-${Date.now()}`;
 
   const fields = {
-    protocol, idp, domains,
+    protocol, idp, domains: domainList,
     tenant_id, entra_tenant_id: entraTenantId, entraTenantId,
     owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
