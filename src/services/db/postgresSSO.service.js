@@ -195,8 +195,7 @@ const deleteUser = async (userId) => {
 // ── Save SSO Config (write path) ──────────────────────────────────────────────
 
 const saveSsoConfig = async ({
-  company_id: proposed_company_id, protocol, idp, domains, tenant_id, entra_tenant_id,
-  owner_tenant_id, owner_company_name,
+  company_id, protocol, idp, domains, tenant_id, entra_tenant_id,
   client_id, auth_method, client_secret, redirect_uri,
   sso_url, entity_id, acs_url, certificate, cert_expiry,
   sign_auth,
@@ -206,61 +205,31 @@ const saveSsoConfig = async ({
 }) => {
   const domainList = (Array.isArray(domains) ? domains : [domains])
     .map(d => String(d).toLowerCase());
-  const sameDomainSet = (a, b) =>
-    a.length === b.length && a.every(d => b.includes(d));
 
   const sequelize = require('../../config/db');
   const tx = await sequelize.transaction();
   try {
-    // 1a — if this owner already has a config on a DIFFERENT domain set, delete it
-    //      first. Enforces one SSO config per owner_tenant_id — prevents ghost rows
-    //      where the same admin owns multiple tenants after re-configuring.
-    if (owner_tenant_id) {
-      const ownerExisting = await SsoIntegration.findOne({
-        where: { owner_tenant_id },
-        transaction: tx,
-      });
-      if (ownerExisting) {
-        const ownerDomains = (await SsoDomain.findAll({
-          where: { company_id: ownerExisting.company_id },
-          transaction: tx,
-        })).map(d => d.domain);
-        if (!sameDomainSet(ownerDomains, domainList)) {
-          const oldCid = ownerExisting.company_id;
-          logger.info(`[POSTGRES] Owner already has config on ${ownerDomains.join(', ')} — removing before save | old_company_id: ${oldCid}`, { action: 'owner_config_replaced' });
-          await JitMapping.destroy({ where: { company_id: oldCid }, transaction: tx });
-          await OidcConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
-          await SamlConfiguration.destroy({ where: { company_id: oldCid }, transaction: tx });
-          await SsoDomain.destroy({ where: { company_id: oldCid }, transaction: tx });
-          await SsoIntegration.destroy({ where: { company_id: oldCid }, transaction: tx });
-        }
-      }
-    }
-
-    // 1b — check if any incoming domain already belongs to an integration
+    // company_id is the sole owner/tenant key. Re-saving the same company_id
+    // updates its row in place (upsert on the PK) and its domain rows are
+    // replaced below — so no separate "owner already has a config" cleanup is
+    // needed. Reject only when an incoming domain is already owned by a
+    // DIFFERENT company.
     const existingDomain = await SsoDomain.findOne({
       where: { domain: { [Op.in]: domainList } },
       transaction: tx,
     });
-    const existing = existingDomain
-      ? await SsoIntegration.findOne({ where: { company_id: existingDomain.company_id }, transaction: tx })
-      : null;
-    // Reject if a DIFFERENT owner already owns one of these domains
-    if (existing && owner_tenant_id && existing.owner_tenant_id && existing.owner_tenant_id !== owner_tenant_id) {
+    if (existingDomain && existingDomain.company_id !== company_id) {
       const conflictErr = new Error('Domain is already configured by another organisation');
       conflictErr.statusCode = 409;
       conflictErr.code = 'DOMAIN_ALREADY_EXISTS';
       throw conflictErr;
     }
-    const company_id = existing ? existing.company_id : proposed_company_id;
 
     // upsert sso_integrations (update if exists, insert if not)
     await SsoIntegration.upsert({
       company_id,
       idp:             idp || 'microsoft_entra',
       entra_tenant_id: entra_tenant_id || tenant_id || null,
-      owner_tenant_id:    owner_tenant_id || null,
-      owner_company_name: owner_company_name || null,
       protocol,
       sso_status:      'active',
       jit_enabled:     !!jit_enabled,
@@ -353,19 +322,17 @@ const saveSsoConfig = async ({
 
 // ── Admin: retrieve full SSO config (secrets masked) ─────────────────────────
 
-const getSsoConfigDetails = async ({ company_id, domain, owner_tenant_id }) => {
+const getSsoConfigDetails = async ({ company_id, domain }) => {
   let integration = null;
   if (company_id) {
+    // company_id is the admin's own tenant — this also serves the "show me my
+    // own SSO setup on next login" lookup that owner_tenant_id used to answer.
     integration = await SsoIntegration.findOne({ where: { company_id } });
   } else if (domain) {
     const domainRow = await SsoDomain.findOne({ where: { domain: domain.toLowerCase() } });
     if (domainRow) {
       integration = await SsoIntegration.findOne({ where: { company_id: domainRow.company_id } });
     }
-  } else if (owner_tenant_id) {
-    // Look up the config the given admin (tenant) configured, so on next login
-    // we can show them their own SSO setup.
-    integration = await SsoIntegration.findOne({ where: { owner_tenant_id } });
   }
   if (!integration) return null;
 

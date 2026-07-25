@@ -144,8 +144,8 @@ const saveToPostgres = async (proposedCompanyId, fields) => {
  * @param {string|string[]} payload.domains    Company email domain(s) (e.g. ["zebra.com"])
  * @param {string}  [payload.idp]
  * @param {string}  [payload.tenant_id]        Azure tenant GUID (required for OIDC)
- * @param {string}  [payload.owner_tenant_id]
- * @param {string}  [payload.owner_company_name]
+ * @param {string}  [payload.company_id]       Configuring admin's tenant id — the sole
+ *                                             owner key; falls back to zdna-<domain>-<ts>
  * @param {string}  [payload.client_id]
  * @param {string}  [payload.auth_method]      client_secret_post | private_key_jwt | certificate
  * @param {string}  [payload.client_secret]
@@ -164,8 +164,7 @@ const saveToPostgres = async (proposedCompanyId, fields) => {
  */
 const saveSsoConfig = async (payload) => {
   const {
-    protocol, idp, domains, tenant_id,
-    owner_tenant_id, owner_company_name,
+    protocol, idp, domains, tenant_id, company_id,
     client_id, auth_method, client_secret, redirect_uri,
     sso_url, entity_id, acs_url, certificate, certificate_password,
     sign_auth, keep_existing_cert,
@@ -182,19 +181,16 @@ const saveSsoConfig = async (payload) => {
 
   const domainList = (Array.isArray(domains) ? domains : [domains]).map(d => d.toLowerCase());
 
-  // company_id = the configuring admin's tenant id (owner_tenant_id) — the
-  // same key deactivate/delete/status use, so one stable id per organisation.
-  // Fallback to the legacy zdna-<domain>-<ts> form when no owner is supplied
-  // (older callers / direct API use) so the Postgres PK can never be null.
-  // NOTE: for domains that already exist, the store keeps the row's ORIGINAL
-  // company_id regardless of this proposal (edit never re-keys a config).
+  // company_id = the configuring admin's tenant id — the single key that
+  // deactivate/delete/status/edit all use, so one stable id per organisation.
+  // Fallback to the legacy zdna-<domain>-<ts> form when the caller supplies no
+  // company_id (direct API use) so the Postgres PK can never be null.
   const proposedCompanyId =
-    owner_tenant_id || `zdna-${domainList[0].replace(/[.\s]/g, '-')}-${Date.now()}`;
+    company_id || `zdna-${domainList[0].replace(/[.\s]/g, '-')}-${Date.now()}`;
 
   const fields = {
     protocol, idp, domains: domainList,
     tenant_id, entra_tenant_id: entraTenantId, entraTenantId,
-    owner_tenant_id, owner_company_name,
     client_id, auth_method, client_secret, redirect_uri,
     // Strip ?appid=... (and any other query) here so the persisted URL carries
     // no query string — the login redirect builder appends its own
@@ -206,11 +202,11 @@ const saveSsoConfig = async (payload) => {
     jit_enabled, jit_mappings: normalizedJitMappings,
   };
 
-  const company_id = await saveToPostgres(proposedCompanyId, fields);
+  const savedCompanyId = await saveToPostgres(proposedCompanyId, fields);
 
   return {
     success:    true,
-    company_id,
+    company_id: savedCompanyId,
     message:    'SSO configuration saved and activated successfully',
   };
 };

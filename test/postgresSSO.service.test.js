@@ -157,12 +157,12 @@ describe('postgresSSO.service', () => {
 
   test('saves SSO config in a transaction and commits on success', async () => {
     const { service, mocks } = loadPostgresService();
-    // An incoming domain already belongs to an existing integration → reuse its id.
+    // Re-saving the same company_id (an edit) — the incoming domain already
+    // belongs to that same company, so it's not a conflict.
     mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
-    mocks.SsoIntegration.findOne.mockResolvedValue({ company_id: 'existing-company' });
 
     await service.saveSsoConfig({
-      company_id: 'proposed-company',
+      company_id: 'existing-company',
       protocol: 'oidc',
       domains: 'example.com',
       client_id: 'client-1',
@@ -260,13 +260,11 @@ describe('postgresSSO.service', () => {
     expect(mocks.transaction.rollback).toHaveBeenCalled();
   });
 
-  test('supports domain and owner_tenant_id lookups and no-op cache invalidation', async () => {
+  test('supports domain lookups (via sso_domains) and no-op cache invalidation', async () => {
     const { service, mocks } = loadPostgresService();
     // Domain lookup resolves via sso_domains → company_id, then the integration.
     mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'company-2' });
-    mocks.SsoIntegration.findOne
-      .mockResolvedValueOnce({ toJSON: () => ({ company_id: 'company-2' }) })
-      .mockResolvedValueOnce({ toJSON: () => ({ company_id: 'company-3', owner_tenant_id: 'tenant-owner-1' }) });
+    mocks.SsoIntegration.findOne.mockResolvedValue({ toJSON: () => ({ company_id: 'company-2' }) });
     mocks.OidcConfiguration.findOne.mockResolvedValue(null);
     mocks.SamlConfiguration.findOne.mockResolvedValue(null);
     mocks.JitMapping.findAll.mockResolvedValue([]);
@@ -276,9 +274,6 @@ describe('postgresSSO.service', () => {
       expect.objectContaining({ integration: expect.objectContaining({ company_id: 'company-2' }) })
     );
     expect(mocks.SsoDomain.findOne).toHaveBeenCalledWith({ where: { domain: 'domain.example.com' } });
-    await expect(service.getSsoConfigDetails({ owner_tenant_id: 'tenant-owner-1' })).resolves.toEqual(
-      expect.objectContaining({ integration: expect.objectContaining({ company_id: 'company-3' }) })
-    );
 
     expect(() => service.invalidateDomainCache('domain.example.com')).not.toThrow();
     expect(mocks.logger.debug).toHaveBeenCalled();

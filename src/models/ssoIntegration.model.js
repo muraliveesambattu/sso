@@ -28,14 +28,6 @@ const ssoIntegration = sequelize.define('ssoIntegration',
         type:DataTypes.BOOLEAN,
         allowNull:false,
         defaultValue:false
-    },
-    owner_tenant_id : {
-        type:DataTypes.STRING(255),
-        allowNull:true,
-    },
-    owner_company_name : {
-        type:DataTypes.STRING(255),
-        allowNull:true,
     }
 },
     {

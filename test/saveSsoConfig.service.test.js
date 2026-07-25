@@ -144,7 +144,7 @@ describe('saveSsoConfig.service', () => {
     expect(savedRow(pgSave).jit_mappings.map(m => m.priority)).toEqual([1, 2, 3]);
   });
 
-  test('uses owner_tenant_id as the company_id when provided (matches deactivate/delete keying)', async () => {
+  test('uses the supplied company_id as the Postgres company_id (matches deactivate/delete keying)', async () => {
     const { saveSsoConfig, pgSave } = loadService({
       getByDomainImpl: async () => ({ company_id: 'noaq1xgCe5otm425Yhk3' }),
     });
@@ -155,18 +155,16 @@ describe('saveSsoConfig.service', () => {
       tenant_id: 'common',
       client_id: 'client-1',
       auth_method: 'client_secret',
-      owner_tenant_id: 'noaq1xgCe5otm425Yhk3',
-      owner_company_name: 'Zebra technologies',
+      company_id: 'noaq1xgCe5otm425Yhk3',
     });
 
     expect(savedRow(pgSave)).toEqual(expect.objectContaining({
       company_id: 'noaq1xgCe5otm425Yhk3',
-      owner_tenant_id: 'noaq1xgCe5otm425Yhk3',
     }));
     expect(result.company_id).toBe('noaq1xgCe5otm425Yhk3');
   });
 
-  test('proposes owner_tenant_id as the Postgres company_id, falling back to zdna-<domain>-<ts> without one', async () => {
+  test('passes the supplied company_id through, falling back to zdna-<domain>-<ts> without one', async () => {
     const { saveSsoConfig, pgSave } = loadService({
       getByDomainImpl: async () => null,
     });
@@ -177,13 +175,13 @@ describe('saveSsoConfig.service', () => {
       tenant_id: 'common',
       client_id: 'client-pg',
       auth_method: 'client_secret_post',
-      owner_tenant_id: 'owner-tenant-42',
+      company_id: 'owner-tenant-42',
     });
     expect(pgSave).toHaveBeenCalledWith(expect.objectContaining({
       company_id: 'owner-tenant-42',
     }));
 
-    // No owner supplied → legacy fallback keeps the PK non-null
+    // No company_id supplied → legacy fallback keeps the PK non-null
     await saveSsoConfig({
       protocol: 'oidc',
       domains: 'no-owner.example.com',

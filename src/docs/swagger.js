@@ -176,6 +176,7 @@ X-Admin-API-Key: <your-admin-api-key>
           properties: {
             protocol:      { type: 'string', enum: ['oidc', 'saml'], example: 'oidc' },
             idp:           { type: 'string', example: 'microsoft_entra' },
+            company_id:    { type: 'string', description: "Configuring admin's tenant id (sole owner key)", example: 'noaq1xgCe5otm425Yhk3' },
             domains:       { type: 'array', items: { type: 'string' }, example: ['gmail-local.com'] },
             tenant_id:     { type: 'string', format: 'uuid', example: '00000000-0000-0000-0000-000000000000' },
             client_id:     { type: 'string', format: 'uuid', example: '11111111-1111-1111-1111-111111111111' },

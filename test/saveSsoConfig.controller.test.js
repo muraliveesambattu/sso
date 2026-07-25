@@ -45,8 +45,7 @@ describe('saveSsoConfig.controller', () => {
       idp: 'microsoft_entra',
       domains: [' Example.COM '],
       tenant_id: ' tenant-1 ',
-      owner_tenant_id: ' owner-1 ',
-      owner_company_name: ' Example Co ',
+      company_id: ' owner-1 ',
       client_id: ' client-1 ',
       auth_method: 'client_secret_post',
       client_secret: 'secret-1',
@@ -63,8 +62,7 @@ describe('saveSsoConfig.controller', () => {
     expect(saveSsoConfig).toHaveBeenCalledWith(expect.objectContaining({
       domains: ['example.com'],
       tenant_id: 'tenant-1',
-      owner_tenant_id: 'owner-1',
-      owner_company_name: 'Example Co',
+      company_id: 'owner-1',
       client_id: 'client-1',
       redirect_uri: 'http://localhost:3000/auth/oidc/callback',
     }));
@@ -91,7 +89,7 @@ describe('saveSsoConfig.controller', () => {
       protocol: 'oidc',
       domains: ['example.com'],
       tenant_id: 'tenant-shared',
-      owner_tenant_id: 'owner-new',
+      company_id: 'owner-new',
     });
     const res = mockRes();
     const next = jest.fn();
@@ -112,7 +110,7 @@ describe('saveSsoConfig.controller', () => {
       protocol: 'oidc',
       domains: ['example.com'],
       tenant_id: 'tenant-shared',
-      owner_tenant_id: 'owner-existing',
+      company_id: 'owner-existing',
     });
     const res = mockRes();
     const next = jest.fn();
@@ -127,12 +125,12 @@ describe('saveSsoConfig.controller', () => {
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
-  test('allows the JIT-mappings-only "Manage roles" quick save, which omits owner_tenant_id entirely', async () => {
+  test('allows the JIT-mappings-only "Manage roles" quick save, which omits company_id entirely', async () => {
     // Real bug hit on EMC: ActiveConfigView's "Manage roles" save path sends
-    // protocol/domains/tenant_id/jit_mappings but no owner_tenant_id at all.
-    // Comparing against owner_tenant_id/company_id treated `undefined` as a
-    // mismatch and rejected every quick JIT edit. domains is always present
-    // and is itself the org's unique identity, so compare on that instead.
+    // protocol/domains/tenant_id/jit_mappings but no company_id at all.
+    // Comparing against company_id treated `undefined` as a mismatch and
+    // rejected every quick JIT edit. domains is always present and is itself
+    // the org's unique identity, so compare on that instead.
     const req = mockReq({
       protocol: 'oidc',
       domains: ['abc.com'],

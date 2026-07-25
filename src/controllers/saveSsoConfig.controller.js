@@ -32,16 +32,15 @@ const handleSaveSsoConfig = async (req, res, next) => {
     const sso_url      = trimStr(req.body.sso_url);
     const entity_id    = trimStr(req.body.entity_id);   // SAML — SP entity / identifier
     const acs_url      = trimStr(req.body.acs_url);      // SAML — assertion consumer service URL
-    const owner_tenant_id    = trimStr(req.body.owner_tenant_id);     // admin who configured this SSO
-    const owner_company_name = trimStr(req.body.owner_company_name);  // their company name
+    const company_id   = trimStr(req.body.company_id);   // configuring admin's tenant id (sole owner key)
 
     // An Entra tenant may only be claimed by one organisation — reject if a
     // DIFFERENT org already registered it. The same org re-saving/editing its
     // own config with the same tenant_id is not a conflict. Compared against
-    // the tenant's registered `domains` set rather than owner_tenant_id/company_id:
-    // not every save path includes owner identity fields (e.g. the JIT-mappings-only
-    // quick save from "Manage roles" omits them entirely), but the verified
-    // domains are always present and are themselves the org's unique identity.
+    // the tenant's registered `domains` set rather than company_id: not every
+    // save path includes company_id (e.g. the JIT-mappings-only quick save from
+    // "Manage roles" may omit it), but the verified domains are always present
+    // and are themselves the org's unique identity.
     if (tenant_id) {
       const existingTenant = await getSsoIntegrationByEntraTenantId(tenant_id);
       if (existingTenant) {
@@ -58,8 +57,7 @@ const handleSaveSsoConfig = async (req, res, next) => {
     logger.info('Save SSO config request', { action: 'sso_save', protocol, domains, jit_enabled, ip: req.ip });
 
     const result = await saveSsoConfig({
-      protocol, idp, domains, tenant_id,
-      owner_tenant_id, owner_company_name,
+      protocol, idp, domains, tenant_id, company_id,
       client_id, auth_method, client_secret, redirect_uri,
       sso_url, entity_id, acs_url, certificate, certificate_password,
       sign_auth, keep_existing_cert,

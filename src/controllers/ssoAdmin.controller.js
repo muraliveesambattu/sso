@@ -22,32 +22,31 @@ const handleGetSsoConfig = async (req, res, next) => {
   // 404/old config for minutes after a fix or a fresh save).
   res.set('Cache-Control', 'no-store');
   try {
-    let { company_id, domain, owner_tenant_id } = req.query;
+    let { company_id, domain } = req.query;
 
     // Bearer-token callers (req.user set by userAuth.middleware) always get
-    // their OWN company's config — ?domain= / ?owner_tenant_id= would
-    // otherwise bypass the company_id scope check.
+    // their OWN company's config — ?domain= would otherwise bypass the
+    // company_id scope check.
     if (req.user?.companyId) {
-      company_id      = req.user.companyId;
-      domain          = undefined;
-      owner_tenant_id = undefined;
+      company_id = req.user.companyId;
+      domain     = undefined;
     }
 
-    if (!company_id && !domain && !owner_tenant_id) {
+    if (!company_id && !domain) {
       return res.status(400).json({
         success: false,
-        message: 'Provide company_id, domain, or owner_tenant_id as a query parameter',
+        message: 'Provide company_id or domain as a query parameter',
       });
     }
 
-    logger.info('Admin: get SSO config', { action: 'admin_get_config', company_id, domain, owner_tenant_id });
+    logger.info('Admin: get SSO config', { action: 'admin_get_config', company_id, domain });
 
-    const config = await ssoDataService.getSsoConfigDetails({ company_id, domain, owner_tenant_id });
+    const config = await ssoDataService.getSsoConfigDetails({ company_id, domain });
 
     if (!config) {
       return res.status(404).json({
         success: false,
-        message: 'No SSO configuration found for the given company_id, domain, or owner_tenant_id',
+        message: 'No SSO configuration found for the given company_id or domain',
       });
     }
 
