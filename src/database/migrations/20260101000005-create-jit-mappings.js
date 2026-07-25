@@ -26,6 +26,10 @@ module.exports = {
         type:      Sequelize.STRING(64),
         allowNull: false,
       },
+      role_name: {
+        type:      Sequelize.STRING(64),
+        allowNull: false,
+      },
       priority: {
         type:      Sequelize.INTEGER,
         allowNull: false,

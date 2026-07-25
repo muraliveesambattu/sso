@@ -190,6 +190,7 @@ X-Admin-API-Key: <your-admin-api-key>
                 type: 'object',
                 properties: {
                   zdna_role:      { type: 'string', example: 'role-admin' },
+                  role_name:      { type: 'string', example: 'Admin', description: 'Display name stored on the mapping; falls back to zdna_role' },
                   mapping_source: { type: 'string', enum: ['group', 'default'], example: 'default' },
                   mapping_value:  { type: 'string', nullable: true, example: 'zdna-admins' },
                 },

@@ -149,20 +149,17 @@ const resolveRoles = async (companyId, identity) => {
   }
 
   const roleIds = [...assignedRoleIds];
-  const known   = await getRolesByIds(roleIds);
 
-  // jit_mappings.role_id may hold a role name from the tenant's own RMS
-  // catalog rather than a local zdna_roles id (RMS roles are per-tenant and
-  // not enumerable here — see saveSsoConfig.service.js). Any id not found
-  // locally is passed through as-is so the user still gets a role label;
-  // real permissions for RMS-integrated companies come from
-  // permissionResolver's RMS-by-email lookup regardless of this value.
-  const knownIds    = new Set(known.map(r => r.role_id));
-  const passthrough = roleIds
-    .filter(id => !knownIds.has(id))
-    .map(id => ({ role_id: id, role_name: id, permissions: [] }));
-
-  return [...known, ...passthrough];
+  // role_name is stored on the mapping itself — no zdna_roles JOIN in the JIT
+  // flow. Permissions for JIT/SSO users come from permissionResolver (RMS →
+  // tenant roleConfig), not zdna_roles, so each row carries an empty
+  // permissions array here.
+  const nameById = new Map(sorted.map(m => [m.role_id, m.role_name]));
+  return roleIds.map(id => ({
+    role_id:     id,
+    role_name:   nameById.get(id) || id,
+    permissions: [],
+  }));
 };
 
 // User store helpers delegate to the PostgreSQL data layer (postgresSSO.service.js)

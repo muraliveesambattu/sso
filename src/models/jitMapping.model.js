@@ -24,6 +24,10 @@ const JitMapping = sequelize.define('JitMapping', {
     type:      DataTypes.STRING(64),
     allowNull: false,
   },
+  role_name: {
+    type:      DataTypes.STRING(64),
+    allowNull: false,
+  },
   priority: {
     type:      DataTypes.INTEGER,
     allowNull: false,

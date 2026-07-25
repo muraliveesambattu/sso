@@ -90,10 +90,9 @@ describe('userResolution.service', () => {
   test('creates a JIT user on first login and assigns matching group roles', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
-      { mapping_source: 'group', mapping_value: 'zdna-admins', role_id: 'role-admin', priority: 1 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
+      { mapping_source: 'group', mapping_value: 'zdna-admins', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockResolvedValue({ user_id: 'user-1', email: 'user@example.com' });
 
@@ -117,7 +116,7 @@ describe('userResolution.service', () => {
     }));
     expect(result).toEqual({
       user: { user_id: 'user-1', email: 'user@example.com' },
-      roles: [{ role_id: 'role-admin', role_name: 'Admin' }],
+      roles: [{ role_id: 'role-admin', role_name: 'Admin', permissions: [] }],
       action: 'created',
     });
   });
@@ -125,13 +124,11 @@ describe('userResolution.service', () => {
   test('matches department, jobtitle, and app-role mapping sources during JIT provisioning', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'department', mapping_value: 'IT',        role_id: 'role-admin',   priority: 1 },
-      { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-manager', priority: 2 },
-      { mapping_source: 'role',       mapping_value: 'Zdna.Admin', role_id: 'role-admin',  priority: 3 },
-      { mapping_source: 'default',    mapping_value: null,        role_id: 'role-temporary',  priority: 99 },
+      { mapping_source: 'department', mapping_value: 'IT',        role_id: 'role-admin',   role_name: 'Admin',     priority: 1 },
+      { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-manager', role_name: 'Manager',   priority: 2 },
+      { mapping_source: 'role',       mapping_value: 'Zdna.Admin', role_id: 'role-admin',  role_name: 'Admin',     priority: 3 },
+      { mapping_source: 'default',    mapping_value: null,        role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
     ]);
-    getRolesByIds.mockImplementation(async (ids) =>
-      ids.map(id => ({ role_id: id, role_name: id })));
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 
@@ -145,16 +142,15 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-admin', 'role-manager']);
+    // role_name resolved from the mapping (no zdna_roles JOIN in the JIT flow)
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-admin', 'role-manager'] }));
   });
 
   test('matches an arbitrary Entra claim name against the raw token/assertion', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'employeetype', mapping_value: 'contractor', role_id: 'role-temporary', priority: 1 },
+      { mapping_source: 'employeetype', mapping_value: 'contractor', role_id: 'role-temporary', role_name: 'Temporary', priority: 1 },
     ]);
-    getRolesByIds.mockImplementation(async (ids) =>
-      ids.map(id => ({ role_id: id, role_name: id })));
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 
@@ -165,18 +161,16 @@ describe('userResolution.service', () => {
       employeeType: 'Contractor', // custom Entra claim, not one of the 4 named fields
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-temporary'] }));
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
   test('logs a warning (and does not match) when a custom claim name is absent from the token', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'costCenter', mapping_value: 'CC-100', role_id: 'role-admin', priority: 1 },
-      { mapping_source: 'default',    mapping_value: null,    role_id: 'role-temporary', priority: 99 },
+      { mapping_source: 'costCenter', mapping_value: 'CC-100', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
+      { mapping_source: 'default',    mapping_value: null,    role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
     ]);
-    getRolesByIds.mockImplementation(async (ids) =>
-      ids.map(id => ({ role_id: id, role_name: id })));
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 
@@ -187,7 +181,7 @@ describe('userResolution.service', () => {
       // no costCenter claim present at all — likely a typo'd/misconfigured claim name
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']); // falls back to default
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-temporary'] })); // falls back to default
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('not present in the token'),
       expect.objectContaining({ action: 'jit_unknown_claim', mapping_source: 'costCenter' })
@@ -197,10 +191,9 @@ describe('userResolution.service', () => {
   test('falls back to the default mapping when no attribute matches', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
-      { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin',  priority: 1 },
-      { mapping_source: 'default',    mapping_value: null, role_id: 'role-temporary', priority: 99 },
+      { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin',  role_name: 'Admin', priority: 1 },
+      { mapping_source: 'default',    mapping_value: null, role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-temporary', role_name: 'Temporary' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 
@@ -211,19 +204,17 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(getRolesByIds).toHaveBeenCalledWith(['role-temporary']);
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-temporary'] }));
   });
 
-  test('passes through a JIT-mapped role that is not in the local zdna_roles catalog', async () => {
-    // jit_mappings.role_id may hold a name from the tenant's own RMS role
-    // catalog rather than a local zdna_roles id — getRolesByIds legitimately
-    // finds nothing for it, and resolveRoles must still surface the role
-    // (with empty local permissions) instead of silently dropping it.
+  test('falls back to the role id as role_name when the mapping stores no name', async () => {
+    // A mapping may store only the role id (RMS roles are per-tenant). When the
+    // mapping has no role_name, resolveRoles surfaces the role with role_name =
+    // role_id (and empty permissions — real permissions come from RMS/roleConfig).
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT', role_id: 'Field Technician', priority: 1 },
     ]);
-    getRolesByIds.mockResolvedValue([]); // unknown to zdna_roles
     findUserByOid.mockResolvedValue(null);
     createUser.mockImplementation(async (u) => u);
 

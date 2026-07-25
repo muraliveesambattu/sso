@@ -185,6 +185,10 @@ describe('postgresSSO.service', () => {
       [{ company_id: 'existing-company', domain: 'example.com' }],
       { transaction: mocks.transaction },
     );
+    // role_name persisted on the mapping; falls back to the role id here.
+    expect(mocks.JitMapping.bulkCreate).toHaveBeenCalledWith([
+      expect.objectContaining({ company_id: 'existing-company', role_id: 'role-admin', role_name: 'role-admin' }),
+    ], { transaction: mocks.transaction });
     expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(expect.objectContaining({
       company_id: 'existing-company',
       client_secret_enc: 'enc:secret-1',
@@ -242,17 +246,16 @@ describe('postgresSSO.service', () => {
     mocks.SamlConfiguration.findOne.mockResolvedValue({
       toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert' }),
     });
-    mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin' }) }]);
+    mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin', role_name: 'Admin' }) }]);
     mocks.SsoDomain.findAll.mockResolvedValue([{ domain: 'example.com' }]);
-    mocks.ZdnaRole.findAll.mockResolvedValue([{ toJSON: () => ({ role_id: 'role-admin', role_name: 'Admin' }) }]);
 
     const details = await service.getSsoConfigDetails({ company_id: 'company-1' });
     expect(details.integration.domains).toEqual(['example.com']);
     expect(details.oidc_config.client_secret_set).toBe(true);
     expect(details.oidc_config.client_secret_enc).toBeUndefined();
     expect(details.saml_config.sp_private_key_enc).toBeUndefined();
-    // jit_mappings enriched with role_name so the console's RMS-fed dropdown
-    // can pre-select the right option when a saved config is reopened for edit.
+    // role_name is stored on the mapping (no zdna_roles JOIN) so the console's
+    // RMS-fed dropdown can pre-select the right option when a config is reopened.
     expect(details.jit_mappings[0]).toEqual(expect.objectContaining({ role_id: 'role-admin', role_name: 'Admin' }));
 
     mocks.OidcConfiguration.destroy.mockRejectedValueOnce(new Error('delete failed'));

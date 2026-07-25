@@ -306,6 +306,10 @@ const saveSsoConfig = async ({
           mapping_source: m.mapping_source,
           mapping_value:  m.mapping_value || null,
           role_id:        m.zdna_role,
+          // role_name is stored on the mapping so the login/config-view flow
+          // reads it directly (no zdna_roles JOIN). Falls back to the id when
+          // the caller sends only the role identifier.
+          role_name:      m.role_name || m.zdna_role,
           priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
           status:         'active',
         }));
@@ -360,19 +364,15 @@ const getSsoConfigDetails = async ({ company_id, domain }) => {
   const saml = samlRow ? samlRow.toJSON() : null;
   if (saml) delete saml.sp_private_key_enc;
 
-  // Enrich each mapping with role_name — the console's JIT Role dropdown is
-  // fed by RMS role names (not zdna_roles.role_id), so the edit view needs
-  // the name to pre-select the right option.
+  // role_name is stored on each mapping (no zdna_roles JOIN) — the console's
+  // edit view uses it to pre-select the right option in the JIT Role dropdown.
   const jitMappingRows = jitRows.map(r => r.toJSON());
-  const roleIds       = [...new Set(jitMappingRows.map(m => m.role_id).filter(Boolean))];
-  const roles         = await getRolesByIds(roleIds);
-  const roleNameById  = new Map(roles.map(r => [r.role_id, r.role_name]));
 
   return {
     integration:  intData,
     oidc_config:  oidc,
     saml_config:  saml,
-    jit_mappings: jitMappingRows.map(m => ({ ...m, role_name: roleNameById.get(m.role_id) || null })),
+    jit_mappings: jitMappingRows,
   };
 };
 
