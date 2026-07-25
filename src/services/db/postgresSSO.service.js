@@ -232,7 +232,7 @@ const saveSsoConfig = async ({
       entra_tenant_id: entra_tenant_id || tenant_id || null,
       protocol,
       sso_status:      'active',
-      jit_enabled:     !!jit_enabled,
+      jit_status:      !!jit_enabled,
     }, { transaction: tx });
 
     // replace the company's domain rows with the incoming set

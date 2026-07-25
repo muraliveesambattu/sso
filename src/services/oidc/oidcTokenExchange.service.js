@@ -120,7 +120,7 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     // The id_token never carries them, so ask Graph — but only when JIT is on
     // (non-JIT ignores mappings), and never let a profile failure kill a login.
     let profile = { department: null, jobTitle: null };
-    if (ssoIntegration.jit_enabled) {
+    if (ssoIntegration.jit_status) {
       try {
         profile = await fetchUserProfileFromGraph(tokens.access_token);
       } catch (err) {

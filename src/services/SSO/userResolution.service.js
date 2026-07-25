@@ -186,12 +186,12 @@ const resolveUser = async (companyId, claims, protocol) => {
   }
 
   // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
-  // Flag takes priority over sso_integrations.jit_enabled column.
+  // Flag takes priority over the sso_integrations.jit_status column.
   // This lets admins disable JIT without changing the SSO config record.
   const jitFlag    = await isEnabled(companyId, 'jit_enabled');
-  const jitEnabled = integration.jit_enabled === true && jitFlag;
+  const jitEnabled = integration.jit_status === true && jitFlag;
 
-  if (integration.jit_enabled && !jitFlag) {
+  if (integration.jit_status && !jitFlag) {
     logger.info('JIT provisioning disabled by feature flag', {
       action: 'jit_flag_blocked', company_id: companyId,
     });

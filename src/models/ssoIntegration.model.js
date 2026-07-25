@@ -13,7 +13,7 @@ const ssoIntegration = sequelize.define('ssoIntegration',
         allowNull:false,
     },
     entra_tenant_id : {
-        type:DataTypes.STRING(60),
+        type:DataTypes.STRING(64),
         allowNull:false,
     },
     protocol: {
@@ -24,7 +24,7 @@ const ssoIntegration = sequelize.define('ssoIntegration',
         type: DataTypes.STRING(10),
         allowNull:false,
     },
-    jit_enabled : {
+    jit_status : {
         type:DataTypes.BOOLEAN,
         allowNull:false,
         defaultValue:false

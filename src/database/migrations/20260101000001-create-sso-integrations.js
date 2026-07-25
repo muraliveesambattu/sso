@@ -13,7 +13,7 @@ module.exports = {
         allowNull: false,
       },
       entra_tenant_id: {
-        type:      Sequelize.STRING(60),
+        type:      Sequelize.STRING(64),
         allowNull: false,
       },
       protocol: {
@@ -25,7 +25,7 @@ module.exports = {
         allowNull:    false,
         defaultValue: 'active',
       },
-      jit_enabled: {
+      jit_status: {
         type:         Sequelize.BOOLEAN,
         allowNull:    false,
         defaultValue: false,

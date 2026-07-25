@@ -53,7 +53,7 @@ describe('userResolution.service', () => {
   });
 
   test('throws 400 when required identity fields are missing', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
 
     await expect(resolveUser('company-1', { name: 'User Only' }, 'oidc')).rejects.toMatchObject({
       statusCode: 400,
@@ -62,7 +62,7 @@ describe('userResolution.service', () => {
   });
 
   test('extracts SAML identity fields and single group values during JIT provisioning', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-saml', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-saml', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'group', mapping_value: 'zdna-saml-admins', role_id: 'role-admin', priority: 1 },
       { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
@@ -88,7 +88,7 @@ describe('userResolution.service', () => {
   });
 
   test('creates a JIT user on first login and assigns matching group roles', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
       { mapping_source: 'group', mapping_value: 'zdna-admins', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
@@ -122,7 +122,7 @@ describe('userResolution.service', () => {
   });
 
   test('matches department, jobtitle, and app-role mapping sources during JIT provisioning', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT',        role_id: 'role-admin',   role_name: 'Admin',     priority: 1 },
       { mapping_source: 'jobtitle',   mapping_value: 'engineer',  role_id: 'role-manager', role_name: 'Manager',   priority: 2 },
@@ -147,7 +147,7 @@ describe('userResolution.service', () => {
   });
 
   test('matches an arbitrary Entra claim name against the raw token/assertion', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'employeetype', mapping_value: 'contractor', role_id: 'role-temporary', role_name: 'Temporary', priority: 1 },
     ]);
@@ -166,7 +166,7 @@ describe('userResolution.service', () => {
   });
 
   test('logs a warning (and does not match) when a custom claim name is absent from the token', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'costCenter', mapping_value: 'CC-100', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
       { mapping_source: 'default',    mapping_value: null,    role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
@@ -189,7 +189,7 @@ describe('userResolution.service', () => {
   });
 
   test('falls back to the default mapping when no attribute matches', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin',  role_name: 'Admin', priority: 1 },
       { mapping_source: 'default',    mapping_value: null, role_id: 'role-temporary', role_name: 'Temporary', priority: 99 },
@@ -211,7 +211,7 @@ describe('userResolution.service', () => {
     // A mapping may store only the role id (RMS roles are per-tenant). When the
     // mapping has no role_name, resolveRoles surfaces the role with role_name =
     // role_id (and empty permissions — real permissions come from RMS/roleConfig).
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'department', mapping_value: 'IT', role_id: 'Field Technician', priority: 1 },
     ]);
@@ -231,7 +231,7 @@ describe('userResolution.service', () => {
   });
 
   test('updates an existing JIT user on re-login', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
@@ -258,7 +258,7 @@ describe('userResolution.service', () => {
   });
 
   test('falls back to non-JIT mode when the jit_enabled flag is turned off', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     isEnabled.mockResolvedValue(false);
     findUserByOid.mockResolvedValue(null);
     findUserByEmail.mockResolvedValue({
@@ -280,7 +280,7 @@ describe('userResolution.service', () => {
   });
 
   test('rejects non-JIT logins for users who are not provisioned by oid or email', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-2', jit_enabled: false });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-2', jit_status: false });
     findUserByOid.mockResolvedValue(null);
     findUserByEmail.mockResolvedValue(null);
 
@@ -296,7 +296,7 @@ describe('userResolution.service', () => {
   });
 
   test('allows non-JIT logins for pre-provisioned SSO users and updates last_login', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: false });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
     findUserByOid.mockResolvedValue({
       user_id: 'user-4',
       email: 'user@example.com',
@@ -328,7 +328,7 @@ describe('userResolution.service', () => {
   });
 
   test('backfills a pending oid placeholder on first non-JIT login', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_enabled: false });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
     // Pre-provisioned via POST /sso/users — real Entra oid unknown at creation
     findUserByOid.mockResolvedValue(null);
     findUserByEmail.mockResolvedValue({
@@ -353,7 +353,7 @@ describe('userResolution.service', () => {
   });
 
   test('falls back to preferred_username as display name when name is absent during JIT updates', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-3', jit_enabled: true });
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-3', jit_status: true });
     getJitMappings.mockResolvedValue([
       { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
