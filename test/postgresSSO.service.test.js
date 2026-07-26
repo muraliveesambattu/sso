@@ -218,6 +218,7 @@ describe('postgresSSO.service', () => {
       acs_url: 'https://sp.example.com/callback',
       certificate: 'cert-value',
       cert_expiry: '2029-01-01T00:00:00Z',
+      sign_auth: true,
       jit_enabled: false,
     });
 
@@ -226,6 +227,8 @@ describe('postgresSSO.service', () => {
       entity_id: 'https://sp.example.com/metadata',
       acs_url: 'https://sp.example.com/callback',
       certificate: 'cert-value',
+      // The admin's "sign AuthnRequest" choice is now persisted (was dropped).
+      sign_authn_request: true,
     }), { transaction: mocks.transaction });
     expect(mocks.JitMapping.bulkCreate).not.toHaveBeenCalled();
 

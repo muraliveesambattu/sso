@@ -292,7 +292,7 @@ const saveSsoConfig = async ({
         acs_url:     acs_url   || defaults.SAML_ACS_URL,
         certificate: resolvedCert,
         cert_expiry: cert_expiry || null,
-        sign_auth:   sign_auth  || false,
+        sign_authn_request: sign_auth || false,
       }, { transaction: tx });
     }
 

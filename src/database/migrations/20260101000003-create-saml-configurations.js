@@ -16,7 +16,7 @@ module.exports = {
         onDelete:   'CASCADE',
       },
       entity_id: {
-        type:      Sequelize.STRING(255),
+        type:      Sequelize.STRING(512),
         allowNull: false,
       },
       sso_url: {
@@ -34,6 +34,11 @@ module.exports = {
       cert_expiry: {
         type:      Sequelize.DATE,
         allowNull: true,
+      },
+      sign_authn_request: {
+        type:         Sequelize.BOOLEAN,
+        allowNull:    false,
+        defaultValue: false,
       },
       sp_private_key_enc: {
         type:      Sequelize.TEXT,
