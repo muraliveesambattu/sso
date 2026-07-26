@@ -28,7 +28,6 @@ const loadPostgresService = () => {
     upsert: jest.fn(),
     destroy: jest.fn(),
   };
-  const ZdnaRole = { findAll: jest.fn() };
   const JitMapping = {
     findAll: jest.fn(),
     destroy: jest.fn(),
@@ -57,7 +56,6 @@ const loadPostgresService = () => {
     SsoDomain,
     OidcConfiguration,
     SamlConfiguration,
-    ZdnaRole,
     JitMapping,
     SsoUser,
   }));
@@ -66,7 +64,7 @@ const loadPostgresService = () => {
   jest.doMock('sequelize', () => ({ Op: { in: Symbol('in') } }));
 
   const service = require('../src/services/db/postgresSSO.service');
-  return { service, mocks: { transaction, sequelizeDb, queryDb, SsoIntegration, SsoDomain, OidcConfiguration, SamlConfiguration, ZdnaRole, JitMapping, SsoUser, encrypt, resolveSecret, logger } };
+  return { service, mocks: { transaction, sequelizeDb, queryDb, SsoIntegration, SsoDomain, OidcConfiguration, SamlConfiguration, JitMapping, SsoUser, encrypt, resolveSecret, logger } };
 };
 
 describe('postgresSSO.service', () => {
@@ -93,7 +91,7 @@ describe('postgresSSO.service', () => {
     expect(mocks.SsoIntegration.findOne).not.toHaveBeenCalled();
   });
 
-  test('returns null or empty collections for missing integrations, configs, and roles', async () => {
+  test('returns null or empty collections for missing integrations and configs', async () => {
     const { service, mocks } = loadPostgresService();
     mocks.SsoIntegration.findOne.mockResolvedValue(null);
     mocks.OidcConfiguration.findOne.mockResolvedValue(null);
@@ -106,7 +104,6 @@ describe('postgresSSO.service', () => {
     await expect(service.getSamlConfig('missing-company')).resolves.toBeNull();
     await expect(service.getSamlConfigByAcsUrl('https://missing.example.com/callback')).resolves.toBeNull();
     await expect(service.getJitMappings('missing-company')).resolves.toEqual([]);
-    await expect(service.getRolesByIds([])).resolves.toEqual([]);
   });
 
   test('decrypts OIDC secrets and resolves env-backed SAML ACS/entity values', async () => {
@@ -129,14 +126,12 @@ describe('postgresSSO.service', () => {
     );
   });
 
-  test('queries roles and user lookups with normalized inputs', async () => {
+  test('queries user lookups with normalized inputs', async () => {
     const { service, mocks } = loadPostgresService();
-    mocks.ZdnaRole.findAll.mockResolvedValue([{ toJSON: () => ({ role_id: 'role-admin' }) }]);
     mocks.SsoUser.findOne
       .mockResolvedValueOnce({ toJSON: () => ({ user_id: 'user-oid', email: 'user@example.com' }) })
       .mockResolvedValueOnce(null);
 
-    await expect(service.getRolesByIds(['role-admin'])).resolves.toEqual([{ role_id: 'role-admin' }]);
     await expect(service.findUserByOid('company-1', 'oid-1')).resolves.toEqual(
       expect.objectContaining({ id: 'user-oid', email: 'user@example.com' })
     );

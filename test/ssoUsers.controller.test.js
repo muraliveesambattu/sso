@@ -3,8 +3,6 @@ jest.mock('../src/config/logger', () => ({
 }));
 
 jest.mock('../src/services/db/ssoDataService', () => ({
-  getAllRoles: jest.fn(),
-  getRolesByIds: jest.fn(),
   getSsoIntegrationByCompanyId: jest.fn(),
   findUserById: jest.fn(),
   findUserByEmail: jest.fn(),
@@ -14,15 +12,20 @@ jest.mock('../src/services/db/ssoDataService', () => ({
   deleteUser: jest.fn(),
 }));
 
+jest.mock('../src/services/SSO/permissionResolver.service', () => ({
+  resolvePermissions: jest.fn(async () => ({ permissions: [], source: 'none' })),
+}));
+
 const crypto = require('crypto');
 const {
-  handleListRoles, handleGetMe, handleListUsers,
+  handleGetMe, handleListUsers,
   handleCreateUser, handleUpdateUser, handleDeleteUser,
 } = require('../src/controllers/ssoUsers.controller');
 const {
-  getAllRoles, getRolesByIds, getSsoIntegrationByCompanyId,
+  getSsoIntegrationByCompanyId,
   findUserById, findUserByEmail, createUser, updateUser, deleteUser, listUsersByCompany,
 } = require('../src/services/db/ssoDataService');
+const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 
 const mockRes = () => {
   const res = {};
@@ -53,22 +56,14 @@ describe('ssoUsers.controller', () => {
     randomUuidSpy.mockRestore();
   });
 
-  test('handleListRoles returns the role catalogue', async () => {
-    getAllRoles.mockResolvedValue(ROLE_ROWS);
-    const res = mockRes();
-
-    await handleListRoles(mockReq(), res, jest.fn());
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: ROLE_ROWS });
-  });
-
-  test('handleGetMe returns fresh roles + permission union from the DB', async () => {
+  test('handleGetMe returns roles (built from stored values) + resolver permissions', async () => {
     findUserById.mockResolvedValue({
       user_id: 'user-1', company_id: 'company-1', email: 'a@b.com',
       display_name: 'A', roles: ['role-admin', 'role-manager'], last_login: null,
     });
-    getRolesByIds.mockResolvedValue(ROLE_ROWS);
+    resolvePermissions.mockResolvedValue({
+      permissions: ['my_services:editable', 'users:editable'], source: 'role_config',
+    });
     const req = mockReq({ user: { uid: 'user-1' } });
     const res = mockRes();
 
@@ -76,8 +71,14 @@ describe('ssoUsers.controller', () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     const payload = res.json.mock.calls[0][0];
-    expect(payload.data.roles).toEqual(ROLE_ROWS);
-    expect(payload.data.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
+    // roles built from stored values (role_name = the stored value; permissions
+    // resolved separately from RMS/Firestore).
+    expect(payload.data.roles).toEqual([
+      { role_id: 'role-admin',   role_name: 'role-admin',   permissions: [] },
+      { role_id: 'role-manager', role_name: 'role-manager', permissions: [] },
+    ]);
+    expect(payload.data.permissions).toEqual(['my_services:editable', 'users:editable']);
+    expect(payload.data.permissions_source).toBe('role_config');
   });
 
   test('handleGetMe 404s when the caller has no sso_users record', async () => {
@@ -109,7 +110,6 @@ describe('ssoUsers.controller', () => {
 
     test('creates a pre-provisioned user with a pending oid placeholder', async () => {
       getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
-      getRolesByIds.mockResolvedValue([ROLE_ROWS[1]]);
       findUserByEmail.mockResolvedValue(null);
       createUser.mockImplementation(async (u) => u);
       const res = mockRes();
@@ -136,19 +136,17 @@ describe('ssoUsers.controller', () => {
       expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 404, code: 'INTEGRATION_NOT_FOUND' }));
     });
 
-    test('400 INVALID_ROLE_ID for unknown roles', async () => {
+    test('400 MISSING_ROLES when no roles are assigned', async () => {
       getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
-      getRolesByIds.mockResolvedValue([]); // nothing matches
       const next = jest.fn();
 
-      await handleCreateUser(mockReq({ body: { ...validBody, roles: ['role-ghost'] } }), mockRes(), next);
+      await handleCreateUser(mockReq({ body: { ...validBody, roles: [] } }), mockRes(), next);
 
-      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, code: 'INVALID_ROLE_ID' }));
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, code: 'MISSING_ROLES' }));
     });
 
     test('409 USER_ALREADY_EXISTS for a duplicate email in the same company', async () => {
       getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1' });
-      getRolesByIds.mockResolvedValue([ROLE_ROWS[1]]);
       findUserByEmail.mockResolvedValue({ user_id: 'existing' });
       const next = jest.fn();
 
@@ -169,7 +167,6 @@ describe('ssoUsers.controller', () => {
   describe('handleUpdateUser / handleDeleteUser', () => {
     test('update validates roles and persists them', async () => {
       findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-manager'] });
-      getRolesByIds.mockResolvedValue([ROLE_ROWS[0]]);
       const res = mockRes();
 
       await handleUpdateUser(mockReq({ params: { user_id: 'user-1' }, body: { roles: ['role-admin'] } }), res, jest.fn());

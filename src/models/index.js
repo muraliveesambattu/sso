@@ -3,7 +3,6 @@ const SsoIntegration    = require('./ssoIntegration.model');
 const SsoDomain         = require('./ssoDomain.model');
 const OidcConfiguration = require('./oidcConfig.model');
 const SamlConfiguration = require('./samlConfig.model');
-const ZdnaRole          = require('./zdnaRole.model');
 const JitMapping        = require('./jitMapping.model');
 const SsoUser           = require('./user.model');
 
@@ -27,4 +26,4 @@ JitMapping.belongsTo(SsoIntegration, { foreignKey: 'company_id' });
 SsoIntegration.hasMany(SsoUser, { foreignKey: 'company_id', onDelete: 'CASCADE' });
 SsoUser.belongsTo(SsoIntegration, { foreignKey: 'company_id' });
 
-module.exports = { sequelize, SsoIntegration, SsoDomain, OidcConfiguration, SamlConfiguration, ZdnaRole, JitMapping, SsoUser };
+module.exports = { sequelize, SsoIntegration, SsoDomain, OidcConfiguration, SamlConfiguration, JitMapping, SsoUser };

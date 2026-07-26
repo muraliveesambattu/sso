@@ -3,8 +3,8 @@
  *
  * The sole data backend for all SSO configuration and user data.
  *
- * Tables: sso_integrations, oidc_configurations, saml_configurations,
- *         jit_mappings, zdna_roles, sso_users
+ * Tables: sso_integrations, sso_domains, oidc_configurations,
+ *         saml_configurations, jit_mappings, sso_users
  */
 
 const crypto    = require('crypto');
@@ -16,7 +16,6 @@ const {
   SsoDomain,
   OidcConfiguration,
   SamlConfiguration,
-  ZdnaRole,
   JitMapping,
   SsoUser,
 } = require('../../models');
@@ -117,21 +116,6 @@ const getJitMappings = async (companyId) => {
     where:   { company_id: companyId, status: 'active' },
     order:   [['priority', 'ASC']],
   });
-  return rows.map(r => r.toJSON());
-};
-
-// ── zdna_roles ────────────────────────────────────────────────────────────────
-
-const getRolesByIds = async (roleIds) => {
-  if (!roleIds || roleIds.length === 0) return [];
-  logger.debug(`[POSTGRES] Query zdna_roles | role_ids: ${roleIds.join(', ')}`);
-  const rows = await ZdnaRole.findAll({ where: { role_id: { [Op.in]: roleIds } } });
-  return rows.map(r => r.toJSON());
-};
-
-const getAllRoles = async () => {
-  logger.debug('[POSTGRES] Query zdna_roles | all');
-  const rows = await ZdnaRole.findAll({ order: [['role_id', 'ASC']] });
   return rows.map(r => r.toJSON());
 };
 
@@ -423,8 +407,6 @@ module.exports = {
   getSamlConfig,
   getSamlConfigByAcsUrl,
   getJitMappings,
-  getRolesByIds,
-  getAllRoles,
   findUserByOid,
   findUserByEmail,
   findUserById,

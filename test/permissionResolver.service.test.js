@@ -57,20 +57,20 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     process.env = OLD_ENV;
   });
 
-  test('without RMS config, unions zdna_roles permissions (parsing string shapes)', async () => {
-    const result = await resolvePermissions(ROLES, USER);
+  test('without RMS config and no company_id, resolves to empty (no local role table)', async () => {
+    const result = await resolvePermissions(ROLES, USER); // USER has no company_id
 
-    expect(result.source).toBe('zdna_roles');
-    expect(result.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
+    expect(result.source).toBe('none');
+    expect(result.permissions).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('without a user (no email), stays local even when RMS is configured', async () => {
+  test('without a user (no email), resolves to empty even when RMS is configured', async () => {
     configureRms();
 
     const result = await resolvePermissions(ROLES, null);
 
-    expect(result.source).toBe('zdna_roles');
+    expect(result.source).toBe('none');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -117,14 +117,14 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     expect(tokenCalls).toHaveLength(1);
   });
 
-  test('falls back to zdna_roles when RMS does not know the user (no company_id to derive role config)', async () => {
+  test('resolves to empty when RMS does not know the user and there is no company_id for role config', async () => {
     configureRms();
     fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
 
     const result = await resolvePermissions(ROLES, USER); // USER has no company_id
 
-    expect(result.source).toBe('zdna_roles');
-    expect(result.permissions.sort()).toEqual(['licensing:editable', 'my_devices:editable', 'my_services:editable', 'users:editable']);
+    expect(result.source).toBe('none');
+    expect(result.permissions).toEqual([]);
     expect(getRolePermissionStrings).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,7 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     expect(result).toEqual({ permissions: rolePerms, source: 'role_config', roleName: 'Admin' });
   });
 
-  test('falls through to zdna_roles when the assigned role has no Firestore config', async () => {
+  test('resolves to empty when the assigned role has no Firestore config', async () => {
     configureRms();
     fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce(rmsUserMissing);
     getRolePermissionStrings.mockResolvedValueOnce([]); // no roleConfig doc
@@ -154,7 +154,8 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     const result = await resolvePermissions(ROLES, { ...USER, company_id: 'company-1' });
 
     expect(getRolePermissionStrings).toHaveBeenCalledWith('company-1', 'Admin');
-    expect(result.source).toBe('zdna_roles');
+    expect(result.source).toBe('none');
+    expect(result.permissions).toEqual([]);
   });
 
   test('role config also backstops when RMS is unconfigured (not just not-found)', async () => {
@@ -167,13 +168,13 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('falls back to zdna_roles on any RMS failure (login must not block)', async () => {
+  test('falls back to role config on any RMS failure (login must not block)', async () => {
     configureRms();
     fetchSpy.mockRejectedValue(new Error('ECONNREFUSED'));
 
     const result = await resolvePermissions(ROLES, USER);
 
-    expect(result.source).toBe('zdna_roles');
+    expect(result.source).toBe('none'); // USER has no company_id → no role config either
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('falling back'),
       expect.objectContaining({ action: 'rms_fallback' }),
@@ -184,6 +185,6 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     configureRms();
     fetchSpy.mockResolvedValueOnce(rmsTokenResponse).mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
 
-    expect((await resolvePermissions(ROLES, USER)).source).toBe('zdna_roles');
+    expect((await resolvePermissions(ROLES, USER)).source).toBe('none');
   });
 });

@@ -35,7 +35,6 @@ describe('sso.routes', () => {
     const handleGetSsoConfig = jest.fn();
     const handleSetSsoStatus = jest.fn();
     const handleDeleteSsoConfig = jest.fn();
-    const handleListRoles = jest.fn();
     const handleGetMe = jest.fn();
     const handleListUsers = jest.fn();
     const handleCreateUser = jest.fn();
@@ -58,7 +57,6 @@ describe('sso.routes', () => {
       handleDeleteSsoConfig,
     }));
     jest.doMock('../src/controllers/ssoUsers.controller', () => ({
-      handleListRoles,
       handleGetMe,
       handleListUsers,
       handleCreateUser,
@@ -79,7 +77,6 @@ describe('sso.routes', () => {
     expect(routerMock.post).toHaveBeenCalledWith('/admin/flags', requireAdminKey, updateFlag);
 
     // RBAC endpoints
-    expect(routerMock.get).toHaveBeenCalledWith('/sso/roles', permissionSentinels['my_services:view'], handleListRoles);
     expect(routerMock.get).toHaveBeenCalledWith('/sso/me', requireUser, handleGetMe);
     expect(routerMock.get).toHaveBeenCalledWith('/sso/users', permissionSentinels['users:editable'], handleListUsers);
     expect(routerMock.post).toHaveBeenCalledWith('/sso/users', permissionSentinels['users:editable'], handleCreateUser);

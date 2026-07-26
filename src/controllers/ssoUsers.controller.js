@@ -3,7 +3,6 @@
  *
  * RBAC management endpoints:
  *
- *   GET    /sso/roles           → list zdna_roles (feeds JIT-mapping dropdown)
  *   GET    /sso/me              → caller's fresh roles + permissions (Bearer only)
  *   GET    /sso/users?company_id=… → list a company's provisioned users
  *   POST   /sso/users           → pre-provision a user (required for non-JIT mode)
@@ -25,35 +24,19 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const httpError = (message, statusCode, code) =>
   Object.assign(new Error(message), { statusCode, code });
 
-// Rejects role_ids that don't exist in zdna_roles — the same trap closed for
-// jit_mappings: an unknown id would silently produce a zero-role user.
-const validateRoleIds = async (roleIds) => {
+// Roles are not validated against a local catalog — they're per-tenant RMS /
+// Firestore role names (same as jit_mappings), resolved at login. We only
+// require that at least one role is assigned.
+const validateRoleIds = (roleIds) => {
   if (!Array.isArray(roleIds) || roleIds.length === 0) {
-    throw httpError('roles must be a non-empty array of role_ids', 400, 'MISSING_ROLES');
+    throw httpError('roles must be a non-empty array of role names', 400, 'MISSING_ROLES');
   }
-  const found = await ssoDataService.getRolesByIds(roleIds);
-  const known = new Set(found.map(r => r.role_id));
-  const unknown = roleIds.filter(id => !known.has(id));
-  if (unknown.length) {
-    throw httpError(`Unknown role_id(s): ${unknown.join(', ')}`, 400, 'INVALID_ROLE_ID');
-  }
-  return found;
 };
 
 // Bearer callers may only touch rows in their own company (admin key: any).
 const assertRowInCallerCompany = (req, row) => {
   if (req.user?.companyId && row.company_id !== req.user.companyId) {
     throw httpError('You may only manage your own organisation', 403, 'COMPANY_SCOPE_VIOLATION');
-  }
-};
-
-// GET /sso/roles
-const handleListRoles = async (req, res, next) => {
-  try {
-    const roles = await ssoDataService.getAllRoles();
-    return res.status(200).json({ success: true, data: roles });
-  } catch (err) {
-    next(err);
   }
 };
 
@@ -68,9 +51,9 @@ const handleGetMe = async (req, res, next) => {
         error: { code: 'USER_NOT_FOUND', message: 'No SSO user record for this account.' },
       });
     }
-    const roles = await ssoDataService.getRolesByIds(record.roles || []);
-    // Same source the login token uses (RMS when configured, zdna_roles
-    // otherwise) — /me and the token can't disagree.
+    const roles = (record.roles || []).map(r => ({ role_id: r, role_name: r, permissions: [] }));
+    // Same source the login token uses (RMS → Firestore roleConfig) — /me and
+    // the token can't disagree.
     const { permissions, source } = await resolvePermissions(roles, record);
     return res.status(200).json({
       success: true,
@@ -126,7 +109,7 @@ const handleCreateUser = async (req, res, next) => {
       throw httpError(`SSO integration not found for company: ${company_id}`, 404, 'INTEGRATION_NOT_FOUND');
     }
 
-    await validateRoleIds(roles);
+    validateRoleIds(roles);
 
     const existing = await ssoDataService.findUserByEmail(company_id, email);
     if (existing) {
@@ -171,7 +154,7 @@ const handleUpdateUser = async (req, res, next) => {
 
     const updates = {};
     if (roles !== undefined) {
-      await validateRoleIds(roles);
+      validateRoleIds(roles);
       updates.roles = roles;
     }
     if (display_name !== undefined) updates.display_name = display_name;
@@ -216,7 +199,6 @@ const handleDeleteUser = async (req, res, next) => {
 };
 
 module.exports = {
-  handleListRoles,
   handleGetMe,
   handleListUsers,
   handleCreateUser,

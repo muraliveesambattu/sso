@@ -14,7 +14,6 @@ const { isEnabled } = require('../featureFlag.service');
 const {
   getSsoIntegrationByCompanyId,
   getJitMappings,
-  getRolesByIds,
   findUserByOid,
   findUserByEmail,
   createUser,
@@ -266,8 +265,10 @@ const resolveUser = async (companyId, claims, protocol) => {
     throw err;
   }
 
-  // Step D: Collect role name and id, then trigger login
-  const roles = await getRolesByIds(user.roles || []);
+  // Step D: Build role rows from the user's stored roles — no local role table.
+  // role_name = the stored value; real permissions are resolved downstream from
+  // RMS → Firestore roleConfig (permissionResolver), same as the JIT path.
+  const roles = (user.roles || []).map(r => ({ role_id: r, role_name: r, permissions: [] }));
   logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
 
   // Update last_login — roles unchanged for non-JIT users. Pre-provisioned

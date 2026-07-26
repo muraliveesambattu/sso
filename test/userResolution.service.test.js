@@ -9,7 +9,6 @@ jest.mock('../src/services/featureFlag.service', () => ({
 jest.mock('../src/services/db/ssoDataService', () => ({
   getSsoIntegrationByCompanyId: jest.fn(),
   getJitMappings: jest.fn(),
-  getRolesByIds: jest.fn(),
   findUserByOid: jest.fn(),
   findUserByEmail: jest.fn(),
   createUser: jest.fn(),
@@ -23,7 +22,6 @@ const { isEnabled } = require('../src/services/featureFlag.service');
 const {
   getSsoIntegrationByCompanyId,
   getJitMappings,
-  getRolesByIds,
   findUserByOid,
   findUserByEmail,
   createUser,
@@ -67,7 +65,6 @@ describe('userResolution.service', () => {
       { mapping_source: 'group', mapping_value: 'zdna-saml-admins', role_id: 'role-admin', priority: 1 },
       { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin' }]);
     findUserByOid.mockResolvedValue(null);
     createUser.mockResolvedValue({ user_id: 'saml-user-1', email: 'saml.user@example.com' });
 
@@ -235,7 +232,6 @@ describe('userResolution.service', () => {
     getJitMappings.mockResolvedValue([
       { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
     findUserByOid.mockResolvedValue({
       user_id: 'user-2',
       display_name: 'Old Name',
@@ -304,7 +300,6 @@ describe('userResolution.service', () => {
       login_method: 'sso',
       roles: ['role-manager'],
     });
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
 
     const result = await resolveUser('company-1', {
       email: 'user@example.com',
@@ -322,7 +317,9 @@ describe('userResolution.service', () => {
         login_method: 'sso',
         roles: ['role-manager'],
       },
-      roles: [{ role_id: 'role-manager', role_name: 'Manager' }],
+      // Non-JIT roles are built from the user's stored role values (name = the
+      // stored value); permissions come from RMS/Firestore downstream.
+      roles: [{ role_id: 'role-manager', role_name: 'role-manager', permissions: [] }],
       action: 'login',
     });
   });
@@ -338,7 +335,6 @@ describe('userResolution.service', () => {
       login_method: 'sso',
       roles: ['role-temporary'],
     });
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-temporary', role_name: 'Temporary' }]);
 
     await resolveUser('company-1', {
       email: 'user5@example.com',
@@ -357,7 +353,6 @@ describe('userResolution.service', () => {
     getJitMappings.mockResolvedValue([
       { mapping_source: 'default', mapping_value: null, role_id: 'role-manager', priority: 99 },
     ]);
-    getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager' }]);
     findUserByOid.mockResolvedValue({
       id: 'user-5',
       display_name: 'Old Display',

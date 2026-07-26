@@ -146,7 +146,7 @@ const oidcTokenExchangeService = async (code, companyId, codeVerifier, nonce, cl
     const resolution = await resolveUser(companyId, enrichedClaims, 'oidc');
     logger.info('Step 9 OK: User resolved', { action: 'step_user', userAction: resolution.action });
 
-    // Step 9.5 — Resolve permissions (RMS when configured, zdna_roles union
+    // Step 9.5 — Resolve permissions (RMS when configured, Firestore roleConfig
     // otherwise — see permissionResolver.service.js)
     const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
     logger.info('Step 9.5 OK: Permissions resolved', {

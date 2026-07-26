@@ -102,10 +102,11 @@ describe('firebaseAdmin.util', () => {
       email: 'user2@example.com',
       role: 'Manager',
       roles: [
-        { role_id: 'role-manager', role_name: 'Manager', permissions: ['my_devices:editable', 'licensing:editable'] },
-        // JSON-store rows may carry permissions as a string — must be parsed
-        { role_id: 'role-temporary', role_name: 'Temporary', permissions: '["licensing:editable"]' },
+        { role_id: 'role-manager', role_name: 'Manager', permissions: [] },
+        { role_id: 'role-temporary', role_name: 'Temporary', permissions: [] },
       ],
+      // Permissions arrive pre-resolved from permissionResolver (RMS → Firestore).
+      permissions: ['my_devices:editable', 'licensing:editable'],
       companyId: 'company-2',
       displayName: 'User Two',
     });

@@ -8,7 +8,10 @@ jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
 
 jest.mock('../src/services/db/ssoDataService', () => ({
   findUserById: jest.fn(),
-  getRolesByIds: jest.fn(),
+}));
+
+jest.mock('../src/services/SSO/permissionResolver.service', () => ({
+  resolvePermissions: jest.fn(async () => ({ permissions: [], source: 'none' })),
 }));
 
 const { requireAdminKeyOrPermission, requireUser, hasPermission } = require('../src/middlewares/userAuth.middleware');
@@ -21,7 +24,8 @@ const EDITABLE_FEATURES = [
 const MANAGER_PERMISSIONS = EDITABLE_FEATURES.map((f) => `${f}:editable`);
 const ADMIN_PERMISSIONS   = [...MANAGER_PERMISSIONS, 'my_services:editable', 'users:editable'];
 const { verifyIdToken } = require('../src/utils/firebase/firebaseAdmin.util');
-const { findUserById, getRolesByIds } = require('../src/services/db/ssoDataService');
+const { findUserById } = require('../src/services/db/ssoDataService');
+const { resolvePermissions } = require('../src/services/SSO/permissionResolver.service');
 
 const mockRes = () => {
   const res = {};
@@ -107,7 +111,7 @@ describe('userAuth.middleware', () => {
     test('403 INSUFFICIENT_PERMISSIONS when roles lack the required permission', async () => {
       verifyIdToken.mockResolvedValue({ uid: 'user-1', email: 'a@b.com', companyId: 'company-1' });
       findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-temporary'] });
-      getRolesByIds.mockResolvedValue([{ role_id: 'role-temporary', role_name: 'Temporary', permissions: MANAGER_PERMISSIONS }]);
+      resolvePermissions.mockResolvedValue({ permissions: MANAGER_PERMISSIONS, source: 'role_config' });
       const req = mockReq({ headers: { authorization: 'Bearer good-token' } });
       const next = jest.fn();
 
@@ -119,7 +123,7 @@ describe('userAuth.middleware', () => {
     test('403 COMPANY_SCOPE_VIOLATION when targeting another company', async () => {
       verifyIdToken.mockResolvedValue({ uid: 'user-1', email: 'a@b.com', companyId: 'company-1' });
       findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-admin'] });
-      getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin', permissions: ADMIN_PERMISSIONS }]);
+      resolvePermissions.mockResolvedValue({ permissions: ADMIN_PERMISSIONS, source: 'role_config' });
       const req = mockReq({
         headers: { authorization: 'Bearer good-token' },
         params: { company_id: 'company-OTHER' },
@@ -134,7 +138,7 @@ describe('userAuth.middleware', () => {
     test('passes and attaches req.user when permission + company scope match', async () => {
       verifyIdToken.mockResolvedValue({ uid: 'user-1', email: 'a@b.com', companyId: 'company-1' });
       findUserById.mockResolvedValue({ user_id: 'user-1', email: 'a@b.com', company_id: 'company-1', roles: ['role-admin'] });
-      getRolesByIds.mockResolvedValue([{ role_id: 'role-admin', role_name: 'Admin', permissions: ADMIN_PERMISSIONS }]);
+      resolvePermissions.mockResolvedValue({ permissions: ADMIN_PERMISSIONS, source: 'role_config' });
       const req = mockReq({
         headers: { authorization: 'Bearer good-token' },
         query: { company_id: 'company-1' },
@@ -151,10 +155,10 @@ describe('userAuth.middleware', () => {
       });
     });
 
-    test('permissions from zdna_roles stored as JSON strings are parsed', async () => {
+    test('permissions resolved from RMS/Firestore are attached to req.user', async () => {
       verifyIdToken.mockResolvedValue({ uid: 'user-1', email: 'a@b.com', companyId: 'company-1' });
       findUserById.mockResolvedValue({ user_id: 'user-1', company_id: 'company-1', roles: ['role-manager'] });
-      getRolesByIds.mockResolvedValue([{ role_id: 'role-manager', role_name: 'Manager', permissions: '["my_devices:editable","licensing:editable"]' }]);
+      resolvePermissions.mockResolvedValue({ permissions: ['my_devices:editable', 'licensing:editable'], source: 'role_config' });
       const req = mockReq({ headers: { authorization: 'Bearer good-token' } });
       const next = jest.fn();
 

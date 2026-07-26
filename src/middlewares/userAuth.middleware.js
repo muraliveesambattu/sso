@@ -7,16 +7,18 @@
  *   - X-Admin-API-Key present  → delegated to requireAdminKey (service path,
  *     full access — Postman / server-to-server / break-glass).
  *   - Otherwise                → Firebase ID token from `Authorization: Bearer`.
- *     The caller's roles are loaded FRESH from sso_users → zdna_roles (not from
- *     token claims), so role changes take effect immediately, and the request
- *     is scoped to the caller's own company_id.
+ *     The caller's roles are loaded FRESH from sso_users, and permissions are
+ *     resolved from RMS → Firestore roleConfig (not from token claims), so role
+ *     changes take effect immediately, and the request is scoped to the
+ *     caller's own company_id.
  *
  * On the token path, `req.user` is set to:
- *   { uid, email, companyId, roles: [...zdna_roles rows], permissions: [...] }
+ *   { uid, email, companyId, roles: [...], permissions: [...] }
  */
 
 const { logger } = require('../config/logger');
 const { verifyIdToken } = require('../utils/firebase/firebaseAdmin.util');
+const { resolvePermissions } = require('../services/SSO/permissionResolver.service');
 const { requireAdminKey } = require('./adminAuth.middleware');
 
 const authError = (message, statusCode, code) =>
@@ -74,15 +76,17 @@ const authenticateBearer = async (req) => {
   return { uid: decoded.uid, email: decoded.email || null, companyId: decoded.companyId || null };
 };
 
-// Roles/permissions come from the DB (sso_users.roles → zdna_roles), NOT from
-// token claims — claims are frozen at custom-token mint time; the DB is live.
+// Roles come from sso_users (live, not token claims); permissions are resolved
+// from RMS → Firestore roleConfig via permissionResolver — the same source the
+// login token uses, so /me and the guard can't disagree, and there's no local
+// role table to maintain.
 const loadUserAccess = async (identity) => {
   const record = await dataService().findUserById(identity.uid);
   if (!record) {
     throw authError('User is not provisioned for SSO administration', 403, 'USER_NOT_PROVISIONED');
   }
-  const roles = await dataService().getRolesByIds(record.roles || []);
-  const permissions = [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+  const roles = (record.roles || []).map(r => ({ role_id: r, role_name: r, permissions: [] }));
+  const { permissions } = await resolvePermissions(roles, record);
   return {
     uid:         identity.uid,
     email:       identity.email || record.email,
@@ -97,8 +101,9 @@ const extractTargetCompanyId = (req) =>
   req.params?.company_id || req.query?.company_id || req.body?.company_id || null;
 
 /**
- * Authorizes via admin key (full access) OR a Firebase ID token whose user
- * holds `permission` in zdna_roles AND is acting on their own company.
+ * Authorizes via admin key (full access) OR a Firebase ID token whose user's
+ * resolved permissions (RMS → Firestore) include `permission` AND who is
+ * acting on their own company.
  */
 const requireAdminKeyOrPermission = (permission) => async (req, res, next) => {
   if (req.headers['x-admin-api-key']) return requireAdminKey(req, res, next);

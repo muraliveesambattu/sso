@@ -11,7 +11,7 @@ const { oidcTestCallbackController } = require('../controllers/oidcTestCallback.
 const { handleSaveSsoConfig }   = require('../controllers/saveSsoConfig.controller');
 const { handleGetSsoConfig, handleSetSsoStatus, handleDeleteSsoConfig } = require('../controllers/ssoAdmin.controller');
 const {
-  handleListRoles, handleGetMe, handleListUsers,
+  handleGetMe, handleListUsers,
   handleCreateUser, handleUpdateUser, handleDeleteUser,
 } = require('../controllers/ssoUsers.controller');
 const { getFlags, updateFlag }  = require('../controllers/featureFlag.controller');
@@ -20,17 +20,15 @@ const { requireAdminKey } = require('../middlewares/adminAuth.middleware');
 const { requireAdminKeyOrPermission, requireUser } = require('../middlewares/userAuth.middleware');
 
 // Admin endpoints accept either X-Admin-API-Key (service path, any company) or
-// a Firebase ID token whose zdna_roles grant the named permission — token
-// callers are scoped to their own company_id (userAuth.middleware).
+// a Firebase ID token whose resolved permissions (RMS → Firestore roleConfig)
+// grant the named permission — token callers are scoped to their own
+// company_id (userAuth.middleware).
 
 // ── Feature Flags (platform admin only — never tenant-scoped) ─────────────────
 router.get('/admin/flags/:company_id', requireAdminKey, getFlags);
 router.post('/admin/flags',            requireAdminKey, updateFlag);
 
-// ── RBAC: roles, current user, user provisioning ──────────────────────────────
-
-// Role catalogue — feeds the JIT-mapping dropdown in the SSO setup screens
-router.get('/sso/roles', requireAdminKeyOrPermission('my_services:view'), handleListRoles);
+// ── RBAC: current user, user provisioning ─────────────────────────────────────
 
 // Caller's own roles + permissions, fresh from the DB (Bearer token only)
 router.get('/sso/me', requireUser, handleGetMe);

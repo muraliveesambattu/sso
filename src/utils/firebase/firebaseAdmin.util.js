@@ -185,11 +185,9 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
 
     // ── PRODUCTION ────────────────────────────────────────────────────────────
     const roles = Array.isArray(claims.roles) ? claims.roles : [];
-    // Prefer the pre-resolved permission list (permissionResolver — may come
-    // from the role-management service); fall back to the zdna_roles union.
-    const fullPermissions = Array.isArray(claims.permissions)
-      ? claims.permissions
-      : [...new Set(roles.flatMap(r => toPermissionArray(r.permissions)))];
+    // Permissions come pre-resolved from permissionResolver (RMS → Firestore
+    // roleConfig); there is no local role table to fall back to.
+    const fullPermissions = Array.isArray(claims.permissions) ? claims.permissions : [];
 
     // Provision the per-user Firestore permission doc the console reads for
     // feature enforcement — the FULL list (not the token-truncated copy).
