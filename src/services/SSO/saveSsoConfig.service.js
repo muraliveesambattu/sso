@@ -125,13 +125,13 @@ const stripUrlQuery = (url) => {
 // NOTE: the data-layer require stays lazy (inside this function) on purpose —
 // it pulls in Sequelize models, and hoisting it to module scope would load the
 // ORM at import time even for callers that never persist.
-const saveToPostgres = async (proposedCompanyId, fields) => {
+const saveToPostgres = async (company_id, fields) => {
   const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
-  await pgSave({ company_id: proposedCompanyId, ...fields });
+  await pgSave({ company_id: company_id, ...fields });
   // Re-read via any of the saved domains to learn the actual company_id used
   // (the store reuses an existing row's id when a domain already existed).
   const saved = await getSsoIntegrationByDomain(fields.domains[0]);
-  const company_id = saved ? saved.company_id : proposedCompanyId;
+  const company_id = saved ? saved.company_id : company_id;
   logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${company_id}`);
   return company_id;
 };
@@ -185,8 +185,6 @@ const saveSsoConfig = async (payload) => {
   // deactivate/delete/status/edit all use, so one stable id per organisation.
   // Fallback to the legacy zdna-<domain>-<ts> form when the caller supplies no
   // company_id (direct API use) so the Postgres PK can never be null.
-  const proposedCompanyId =
-    company_id || `zdna-${domainList[0].replace(/[.\s]/g, '-')}-${Date.now()}`;
 
   const fields = {
     protocol, idp, domains: domainList,
@@ -202,7 +200,7 @@ const saveSsoConfig = async (payload) => {
     jit_enabled, jit_mappings: normalizedJitMappings,
   };
 
-  const savedCompanyId = await saveToPostgres(proposedCompanyId, fields);
+  const savedCompanyId = await saveToPostgres(company_id, fields);
 
   return {
     success:    true,
