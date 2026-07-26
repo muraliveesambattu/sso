@@ -124,9 +124,11 @@ describe('firebaseAdmin.util', () => {
     });
     expect(adminMock.createCustomToken).toHaveBeenCalledWith('user-2', {
       email: 'user2@example.com',
-      role: 'Manager',
+      // Firestore rules gate on role "Tenant Owner"/"Administrative User" + identity == tenant,
+      // so the token mirrors the native/console model (real role stays in zdnaRoles).
+      role: 'Tenant Owner',
       tenantId: 'user-2',
-      identity: 'user-2',
+      identity: 'company-2',
       loginType: 'entra',
       companyId: 'company-2',
       displayName: 'User Two',

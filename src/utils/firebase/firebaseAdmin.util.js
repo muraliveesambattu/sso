@@ -209,10 +209,17 @@ const generateCustomToken = async (zdnaTenantId, claims) => {
 
     const additionalClaims = {
       email:       claims.email,
-      role:        claims.role        || 'user',
-      tenantId:    zdnaTenantId,      // ZDNA user_id
-      identity:    zdnaTenantId,      // required by AuthProvider for ADMIN_PERMISSION_TYPE path
-      loginType:   'entra',           // distinguishes from PingFederate (v2)
+      // The console's Firestore rules gate tenant reads via isUser()/isAdmin():
+      //   role ∈ {"Tenant Owner","Administrative User"} AND identity/uid == <tenantId>.
+      // Native logins satisfy this by minting role "Tenant Owner" with identity ==
+      // the tenant. SSO must match the same gate, or every tenant read is denied
+      // regardless of zdnaPermissions (the rules never inspect those). The real
+      // ZDNA role stays in zdnaRoles, and feature-level access is still enforced
+      // in-app via zdnaPermissions.
+      role:        'Tenant Owner',
+      tenantId:    zdnaTenantId,        // ZDNA user_id (unique per user; unchanged)
+      identity:    claims.companyId,    // tenant id — required by Firestore isUser() and the AuthProvider ADMIN path
+      loginType:   'entra',             // distinguishes from PingFederate (v2)
       companyId:   claims.companyId,
       displayName: claims.displayName || '',
       // Full RBAC picture — `role` above only carries roles[0] and gets
