@@ -4,9 +4,9 @@ jest.mock('../src/config/constants', () => ({
   },
 }));
 
-const { EventEmitter } = require('events');
-const https = require('https');
-const crypto = require('crypto');
+const { EventEmitter } = require('node:events');
+const https = require('node:https');
+const crypto = require('node:crypto');
 const { verifyJwtSignature } = require('../src/utils/oidc/jwkValidation.util');
 
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');

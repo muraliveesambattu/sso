@@ -15,7 +15,7 @@
 require('dotenv').config();
 const { Sequelize } = require('sequelize');
 const { Umzug, SequelizeStorage } = require('umzug');
-const path = require('path');
+const path = require('node:path');
 
 // ── DB Connection ─────────────────────────────────────────────────────────────
 const sequelize = process.env.DATABASE_URL

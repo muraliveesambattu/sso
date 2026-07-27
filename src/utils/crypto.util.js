@@ -14,10 +14,10 @@
  *   ENCRYPTION_KEY = 64-char hex string (32 bytes = 256 bits)
  *
  * Generate a key:
- *   node -e "logger.debug(require('crypto').randomBytes(32).toString('hex'))"
+ *   node -e "logger.debug(require('node:crypto').randomBytes(32).toString('hex'))"
  */
 
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const { logger } = require('../config/logger');
 
 const ALGORITHM  = 'aes-256-gcm';

@@ -4,8 +4,8 @@ jest.mock('../src/config/constants', () => ({
   },
 }));
 
-const { EventEmitter } = require('events');
-const https = require('https');
+const { EventEmitter } = require('node:events');
+const https = require('node:https');
 const { fetchUserGroupsFromGraph } = require('../src/utils/oidc/GraphApi.utils');
 
 describe('GraphApi.utils', () => {

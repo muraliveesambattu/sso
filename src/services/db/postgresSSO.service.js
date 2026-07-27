@@ -7,7 +7,7 @@
  *         saml_configurations, jit_mappings, sso_users
  */
 
-const crypto    = require('crypto');
+const crypto    = require('node:crypto');
 const { Op }    = require('sequelize');
 const { logger } = require('../../config/logger');
 const { defaults } = require('../../config/constants');

@@ -15,7 +15,7 @@ jest.mock('../src/services/db/ssoDataService', () => ({
   updateUser: jest.fn(),
 }));
 
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
 const { logger } = require('../src/config/logger');
 const { isEnabled } = require('../src/services/featureFlag.service');

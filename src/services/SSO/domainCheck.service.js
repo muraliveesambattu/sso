@@ -19,7 +19,7 @@
  *     - No code_verifier needed — credential resolved server-side at token exchange
  */
 
-const crypto   = require('crypto');
+const crypto   = require('node:crypto');
 const { logger }    = require('../../config/logger');
 const { isEnabled } = require('../featureFlag.service');
 const { buildSamlRedirectUrl } = require('../Saml/samlAuthRequest.service');

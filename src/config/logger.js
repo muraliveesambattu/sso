@@ -34,7 +34,7 @@ const maskPii = format((info) => {
   if (info.email)   info.email   = maskEmail(info.email);
   if (info.oid)     info.oid     = '***masked***';
   if (info.message) info.message = info.message
-    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[email]');
+    .replaceAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[email]');
   return info;
 });
 

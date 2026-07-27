@@ -14,7 +14,7 @@ const { decodeJwt, generateJwtAssertion } = require('../utils/oidc/tokenExchange
 const { verifyJwtSignature } = require('../utils/oidc/jwkValidation.util');
 const { logger }          = require('../config/logger');
 const tcStore             = require('../utils/shared/testConnectionStore');
-const https               = require('https');
+const https               = require('node:https');
 const { microsoft }       = require('../config/constants');
 
 const FETCH_TIMEOUT_MS  = 10000;
@@ -54,7 +54,7 @@ const withRetry = async (label, fn) => {
 const fetchJson = (url, options) =>
   new Promise((resolve, reject) => {
     const body = options.body || null;
-    const headers = { ...(options.headers || {}) };
+    const headers = { ...options.headers };
     if (body) headers['Content-Length'] = Buffer.byteLength(body);
 
     const req = https.request(url, { method: options.method || 'GET', headers }, (res) => {

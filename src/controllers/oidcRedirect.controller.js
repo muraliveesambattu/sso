@@ -14,7 +14,7 @@
  * GET /auth/oidc/callback?code=...&state=...&session_state=...
  */
 
-const path = require('path');
+const path = require('node:path');
 const { logger } = require('../config/logger');
 const { defaults } = require('../config/constants');
 

@@ -16,7 +16,7 @@ jest.mock('../src/services/SSO/permissionResolver.service', () => ({
   resolvePermissions: jest.fn(async () => ({ permissions: [], source: 'none' })),
 }));
 
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const {
   handleGetMe, handleListUsers,
   handleCreateUser, handleUpdateUser, handleDeleteUser,

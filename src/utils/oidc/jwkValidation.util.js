@@ -9,8 +9,8 @@
  * Entra on every request. Keys rotate infrequently.
  */
 
-const https  = require('https');
-const crypto = require('crypto');
+const https  = require('node:https');
+const crypto = require('node:crypto');
 const { microsoft } = require('../../config/constants');
 
 const JWKS_TIMEOUT_MS = 10000;

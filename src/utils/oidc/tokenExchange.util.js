@@ -7,10 +7,10 @@
  *   none (PKCE)        → code_verifier proves possession of code_challenge
  */
 
-const https  = require('https');
+const https  = require('node:https');
 const { logger } = require('../../config/logger');
-const crypto = require('crypto');
-const { URL } = require('url');
+const crypto = require('node:crypto');
+const { URL } = require('node:url');
 const { microsoft } = require('../../config/constants');
 
 // Builds the URL-encoded POST body for the /token request

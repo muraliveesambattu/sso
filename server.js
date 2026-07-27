@@ -17,7 +17,7 @@ const express        = require('express');
 const cors           = require('cors');
 const helmet         = require('helmet');
 const session        = require('express-session');
-const path           = require('path');
+const path           = require('node:path');
 const swaggerUi      = require('swagger-ui-express');
 const swaggerSpec    = require('./src/docs/swagger');
 const ssoRoutes      = require('./src/routers/sso.routes');
@@ -76,7 +76,7 @@ const DEFAULT_ORIGINS = [
   'https://dnacloud-demo2-t.web.app',
 ];
 const clientOrigins  = (process.env.CLIENT_URL || '').split(',').map(o => o.trim()).filter(Boolean);
-const allowedOrigins = [...new Set([...DEFAULT_ORIGINS, ...clientOrigins])];
+const allowedOrigins = new Set([...DEFAULT_ORIGINS, ...clientOrigins]);
 
 // SAML callback — skip CORS entirely. Microsoft Entra POSTs the SAML assertion
 // here as a cross-origin top-level form submit (Origin: login.microsoftonline.com),
@@ -90,7 +90,7 @@ const strictCors = cors({
   origin: (origin, cb) => {
     // Allow no-origin requests (server-to-server)
     if (!origin || origin === 'null') return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (allowedOrigins.has(origin)) return cb(null, true);
     cb(new Error(`CORS: origin ${origin} not allowed`));
   },
   credentials: true,

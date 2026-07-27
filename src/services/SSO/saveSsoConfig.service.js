@@ -3,7 +3,7 @@ const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 
 // Validation patterns/allow-lists.
 const ALLOWED_PROTOCOLS = ['oidc', 'saml'];
-const TENANT_ALIASES    = ['common', 'consumers', 'organizations'];
+const TENANT_ALIASES    = new Set(['common', 'consumers', 'organizations']);
 const DOMAIN_RE = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const UUID_RE   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const URL_RE    = /^https?:\/\/.+/;
@@ -32,7 +32,7 @@ const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   }
   if (protocol === 'oidc') {
     if (!tenant_id) throw fieldError('tenant_id is required for OIDC', 'MISSING_TENANT_ID');
-    if (!UUID_RE.test(tenant_id) && !TENANT_ALIASES.includes(tenant_id)) {
+    if (!UUID_RE.test(tenant_id) && !TENANT_ALIASES.has(tenant_id)) {
       throw fieldError('tenant_id must be a valid UUID or common/consumers/organizations', 'INVALID_TENANT_ID');
     }
   }

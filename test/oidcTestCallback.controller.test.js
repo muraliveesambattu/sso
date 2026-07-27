@@ -21,8 +21,8 @@ jest.mock('../src/config/constants', () => ({
   },
 }));
 
-const { EventEmitter } = require('events');
-const https = require('https');
+const { EventEmitter } = require('node:events');
+const https = require('node:https');
 const { oidcTestCallbackController } = require('../src/controllers/oidcTestCallback.controller');
 const { decodeJwt, generateJwtAssertion } = require('../src/utils/oidc/tokenExchange.util');
 const { verifyJwtSignature } = require('../src/utils/oidc/jwkValidation.util');

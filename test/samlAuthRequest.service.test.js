@@ -13,9 +13,9 @@ const loadSamlAuthRequestService = ({ privateKeyPem = null, envPrivateKeyB64 = n
   const sign = jest.fn(() => Buffer.from('signature-bytes'));
   const deflateRaw = jest.fn(deflateImpl || ((buffer, cb) => cb(null, Buffer.from(`deflated:${buffer.toString('utf8')}`))));
 
-  jest.doMock('fs', () => ({ readFileSync }));
-  jest.doMock('crypto', () => ({ randomUUID, sign }));
-  jest.doMock('zlib', () => ({ deflateRaw }));
+  jest.doMock('node:fs', () => ({ readFileSync }));
+  jest.doMock('node:crypto', () => ({ randomUUID, sign }));
+  jest.doMock('node:zlib', () => ({ deflateRaw }));
   jest.doMock('../src/config/logger', () => ({ logger }));
 
   const service = require('../src/services/Saml/samlAuthRequest.service');

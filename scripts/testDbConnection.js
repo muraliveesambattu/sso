@@ -18,7 +18,7 @@
  * From your Mac or Cloud Shell it will ETIMEDOUT against a private-only instance.
  */
 
-const path = require('path');
+const path = require('node:path');
 // Load .env from the repo root regardless of the current working directory,
 // so `node scripts/testDbConnection.js` works the same as running from scripts/.
 require('dotenv').config({ path: path.join(__dirname, '../.env') });

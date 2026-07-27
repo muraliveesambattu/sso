@@ -4,7 +4,7 @@
  * Validates X-Admin-API-Key header using timing-safe comparison.
  */
 
-const crypto        = require('crypto');
+const crypto        = require('node:crypto');
 const { logger }    = require('../config/logger');
 
 const requireAdminKey = (req, res, next) => {

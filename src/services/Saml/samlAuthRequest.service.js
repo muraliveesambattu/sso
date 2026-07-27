@@ -1,9 +1,9 @@
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const { logger } = require('../../config/logger');
-const zlib   = require('zlib');
-const fs     = require('fs');
-const path   = require('path');
-const { promisify } = require('util');
+const zlib   = require('node:zlib');
+const fs     = require('node:fs');
+const path   = require('node:path');
+const { promisify } = require('node:util');
 
 const deflateRaw = promisify(zlib.deflateRaw);
 const SESSION_TTL_MS = 600000; // 10 minutes

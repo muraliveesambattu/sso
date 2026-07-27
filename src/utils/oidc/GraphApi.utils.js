@@ -11,8 +11,8 @@
  * This scope must be granted admin consent in the Entra App Registration.
  */
 
-const https     = require('https');
-const { URL }   = require('url');  
+const https     = require('node:https');
+const { URL }   = require('node:url');  
 const { microsoft } = require('../../config/constants');
 
 // Fetches a single page from Graph API

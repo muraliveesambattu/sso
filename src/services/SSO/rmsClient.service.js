@@ -27,7 +27,7 @@
 
 const { logger } = require('../../config/logger');
 
-const timeoutMs = () => parseInt(process.env.RMS_TIMEOUT_MS || '3000', 10);
+const timeoutMs = () => Number.parseInt(process.env.RMS_TIMEOUT_MS || '3000', 10);
 
 const isRmsConfigured = () =>
   !!(process.env.ROLE_MANAGEMENT_SERVICE_URL &&

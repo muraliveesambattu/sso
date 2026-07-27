@@ -12,13 +12,21 @@ jest.mock('../src/config/constants', () => ({
     samlMetadataUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/federationmetadata/2007-06/federationmetadata.xml`,
     authorizeUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`,
     graphScope: 'https://graph.microsoft.com/.default',
+    // SSRF guard (mirrors the real config) — fetchJson calls this before every request.
+    isAllowedUrl: (rawUrl) => {
+      try {
+        const u = new URL(rawUrl);
+        return u.protocol === 'https:'
+          && ['login.microsoftonline.com', 'graph.microsoft.com', 'sts.windows.net'].includes(u.hostname);
+      } catch { return false; }
+    },
   },
 }));
 
-const { EventEmitter } = require('events');
-const crypto = require('crypto');
-const http = require('http');
-const https = require('https');
+const { EventEmitter } = require('node:events');
+const crypto = require('node:crypto');
+const http = require('node:http');
+const https = require('node:https');
 const { extractFromPkcs12 } = require('../src/utils/oidc/pkcs12.util');
 const { testConnection } = require('../src/services/SSO/testConnection.service');
 
@@ -28,7 +36,7 @@ const mockRequest = (moduleRef, responder) => jest.spyOn(moduleRef, 'request').m
   req.write = jest.fn((chunk) => { body += chunk; });
   req.end = jest.fn(() => {
     const res = new EventEmitter();
-    const response = responder({ url, options, body, req });
+    const response = responder({ url: String(url), options, body, req });
 
     if (response.error) {
       process.nextTick(() => req.emit('error', response.error));
@@ -291,5 +299,21 @@ describe('testConnection.service', () => {
       success: false,
       message: 'Unknown protocol',
     });
+  });
+
+  test('blocks an SSRF attempt: a non-Microsoft sso_url host is rejected before any fetch', async () => {
+    // The tenant-extraction regex only substring-matches "login.microsoftonline.com/{guid}/",
+    // so an attacker can embed that in the PATH while using an internal host. The host-based
+    // SSRF guard in fetchJson must still block it.
+    const guid = '12345678-1234-1234-1234-123456789abc';
+    const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: '<xml/>' }));
+
+    await expect(testConnection({
+      protocol: 'saml',
+      tenant_id: guid,
+      sso_url: `https://internal.evil/login.microsoftonline.com/${guid}/saml2`,
+    })).rejects.toMatchObject({ code: 'OUTBOUND_HOST_NOT_ALLOWED' });
+
+    expect(httpsSpy).not.toHaveBeenCalled(); // guard rejects before the request is made
   });
 });

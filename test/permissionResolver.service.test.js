@@ -46,7 +46,7 @@ describe('permissionResolver.service (RMS user-centric)', () => {
     delete process.env.ROLE_MANAGEMENT_SERVICE_URL;
     delete process.env.RMS_OAUTH_TOKEN_URL;
     delete process.env.RMS_OAUTH_AUTHORIZATION_KEY;
-    fetchSpy = jest.spyOn(global, 'fetch');
+    fetchSpy = jest.spyOn(globalThis, 'fetch');
   });
 
   afterEach(() => {

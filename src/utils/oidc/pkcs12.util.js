@@ -12,8 +12,8 @@
  * openssl is guaranteed available on Linux/Cloud Run environments.
  */
 
-const { spawn }  = require('child_process');
-const crypto     = require('crypto');
+const { spawn }  = require('node:child_process');
+const crypto     = require('node:crypto');
 const { logger } = require('../../config/logger');
 
 // Hard cap so a wedged openssl can never hang a request (it reads the bundle
@@ -86,7 +86,7 @@ const extractFromPkcs12 = async (base64Pfx, password) => {
 
   // Unique env var name per invocation — prevents password leakage between
   // concurrent requests sharing the same process environment snapshot.
-  const passKey = `PFX_PASS_${crypto.randomUUID().replace(/-/g, '')}`;
+  const passKey = `PFX_PASS_${crypto.randomUUID().replaceAll(/-/g, '')}`;
   const pass    = password || '';
 
   // ── Private key ──────────────────────────────────────────────────────────────

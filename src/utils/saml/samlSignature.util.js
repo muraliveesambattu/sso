@@ -30,7 +30,7 @@ const formatCertAsPem = (cert) => {
   }
 
   // Case 3: raw base64 DER (just the body) — wrap it in PEM headers.
-  const clean = certStr.replace(/\s/g, '');
+  const clean = certStr.replaceAll(/\s/g, '');
   return `-----BEGIN CERTIFICATE-----\n${clean.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`;
 };
 

@@ -11,7 +11,9 @@ const trimStr = (v) => (typeof v === 'string' ? v.trim() : v);
 // The frontend sends `domains` as an array (e.g. ["zebra.com"]). Normalise to a
 // trimmed, lowercased, de-duplicated array — a company may own many domains.
 const toDomainArray = (v) => {
-  const arr = Array.isArray(v) ? v : (v == null ? [] : [v]);
+  let arr;
+  if (Array.isArray(v)) arr = v;
+  else arr = v == null ? [] : [v];
   return [...new Set(arr.map(d => trimStr(d)?.toLowerCase()).filter(Boolean))];
 };
 

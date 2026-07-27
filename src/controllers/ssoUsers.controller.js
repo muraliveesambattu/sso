@@ -14,7 +14,7 @@
  * request's company_id, and handlers re-check against the target row).
  */
 
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const ssoDataService = require('../services/db/ssoDataService');
 const { resolvePermissions } = require('../services/SSO/permissionResolver.service');
 const { logger } = require('../config/logger');

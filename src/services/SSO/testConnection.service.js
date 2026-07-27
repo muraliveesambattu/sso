@@ -1,26 +1,34 @@
-const https  = require('https');
-const http   = require('http');
-const crypto = require('crypto');
+const https  = require('node:https');
+const crypto = require('node:crypto');
 const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 const { microsoft } = require('../../config/constants');
 const { isCertAuth }        = require('../../utils/shared/authMethod.util');
 
 const fetchJson = (url, options) =>
   new Promise((resolve, reject) => {
-    const lib     = url.startsWith('https') ? https : http;
+    // SSRF guard: `url` derives from tenant-controlled config (tenant_id, sso_url).
+    // Only Microsoft Entra/Graph hosts over HTTPS are allowed, so a tenant cannot
+    // point the service at an internal or arbitrary host.
+    if (!microsoft.isAllowedUrl(url)) {
+      const err = new Error('Outbound request blocked — host not allowed');
+      err.statusCode = 400;
+      err.code = 'OUTBOUND_HOST_NOT_ALLOWED';
+      return reject(err);
+    }
+    const target  = new URL(url);
     const body    = options.body || null;
-    const headers = { ...(options.headers || {}) };
+    const headers = { ...options.headers };
     if (body) headers['Content-Length'] = Buffer.byteLength(body);
 
     const reqOptions = {
       method: options.method || 'GET',
       headers,
-      ...(lib === https && options.rejectUnauthorized === false
+      ...(options.rejectUnauthorized === false
         ? { agent: new https.Agent({ rejectUnauthorized: false }) }
         : {}),
     };
 
-    const req = lib.request(url, reqOptions, (res) => {
+    const req = https.request(target, reqOptions, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
@@ -72,7 +80,7 @@ const testOidcDiscovery = async ({ tenant_id }) => {
 const extractCertsFromMetadata = (xmlString) => {
   if (typeof xmlString !== 'string') return [];
   const matches = [...xmlString.matchAll(/<X509Certificate[^>]*>([\s\S]+?)<\/X509Certificate>/gi)];
-  return matches.map(m => m[1].replace(/\s+/g, ''));
+  return matches.map(m => m[1].replaceAll(/\s+/g, ''));
 };
 
 // Extracts tenant ID from the metadata entityID attribute.
@@ -126,9 +134,9 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
     // Frontend sends certificate as base64(PEM string) — decode first to get PEM, then strip headers
     const pemString = Buffer.from(certificate, 'base64').toString('utf8');
     const uploadedCert = pemString
-      .replace(/-----BEGIN CERTIFICATE-----/g, '')
-      .replace(/-----END CERTIFICATE-----/g, '')
-      .replace(/\s+/g, '');
+      .replaceAll(/-----BEGIN CERTIFICATE-----/g, '')
+      .replaceAll(/-----END CERTIFICATE-----/g, '')
+      .replaceAll(/\s+/g, '');
     if (!azureCerts.includes(uploadedCert)) {
       return { success: false, message: 'Certificate does not match Azure tenant signing certificate' };
     }

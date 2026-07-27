@@ -13,6 +13,12 @@ const MS_LOGIN_BASE = 'https://login.microsoftonline.com';
 const MS_GRAPH_BASE = 'https://graph.microsoft.com';
 const MS_STS_BASE   = 'https://sts.windows.net';
 
+// SSRF allowlist: outbound request targets are built from tenant-controlled
+// config (tenant_id, sso_url), so every outbound host is restricted to the
+// Microsoft endpoints above, HTTPS only — a tenant cannot redirect the service
+// to an internal or arbitrary host.
+const MS_ALLOWED_HOSTS = [MS_LOGIN_BASE, MS_GRAPH_BASE, MS_STS_BASE].map((b) => new URL(b).hostname);
+
 // Microsoft endpoints are constant; only the tenant id varies. Builders take the
 // tenant (GUID or alias like 'common'/'consumers') and return the full URL.
 const microsoft = {
@@ -39,6 +45,14 @@ const microsoft = {
 
   // Issuer validation pattern for the OIDC `iss` claim (tenant-bound v2.0 issuer)
   issuerPattern: /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/v2\.0$/,
+
+  // SSRF guard — only the Microsoft hosts in MS_ALLOWED_HOSTS, HTTPS only.
+  allowedHosts: MS_ALLOWED_HOSTS,
+  isAllowedUrl: (rawUrl) => {
+    let u;
+    try { u = new URL(rawUrl); } catch { return false; }
+    return u.protocol === 'https:' && MS_ALLOWED_HOSTS.includes(u.hostname.toLowerCase());
+  },
 };
 
 // ── Default service URLs / values (env-overridable) ───────────────────────────
