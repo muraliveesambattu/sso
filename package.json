@@ -79,5 +79,8 @@
         "statements": 70
       }
     }
+  },
+  "overrides": {
+    "uuid": "$uuid"
   }
 }

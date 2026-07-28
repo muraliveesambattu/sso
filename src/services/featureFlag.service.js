@@ -28,7 +28,7 @@ const getFlagFromFirestore = async (companyId, flagName) => {
     const doc = await db.collection('feature_flags').doc(companyId).get();
     if (!doc.exists) return null;
     const data = doc.data();
-    return data[flagName] !== undefined ? data[flagName] : null;
+    return data[flagName] === undefined ? null : data[flagName];
   } catch (err) {
     logger.warn('Firestore feature flag read failed — falling back to DB', {
       action: 'feature_flag_firestore_error', flag: flagName, error: err.message,
@@ -78,8 +78,8 @@ const getFlagsForCompany = async (companyId) => {
     }
     const dbValue = await getFlagFromDb(companyId, flag);
     result[flag] = {
-      enabled: dbValue !== null ? dbValue : true,
-      source:  dbValue !== null ? 'database' : 'default',
+      enabled: dbValue === null ? true : dbValue,
+      source:  dbValue === null ? 'default' : 'database',
     };
   }
 

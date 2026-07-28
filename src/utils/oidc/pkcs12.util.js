@@ -132,6 +132,8 @@ const extractFromPkcs12 = async (base64Pfx, password) => {
 
   // ── SHA-1 thumbprint (pure Node.js crypto) ───────────────────────────────────
   // Strip PEM headers → base64-decode to DER → SHA-1
+  // SHA-1 is REQUIRED here: this is the JWT `x5t` header, which RFC 7515
+  // defines as the SHA-1 certificate thumbprint (identifier, not integrity).
   const certBase64 = certPem
     .split('\n')
     .filter(line => !line.startsWith('-----') && line.trim())

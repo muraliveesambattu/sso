@@ -94,7 +94,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
     });
 
@@ -146,7 +146,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
     });
 
@@ -169,7 +169,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
     });
 
@@ -203,7 +203,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
     });
     adminMock.permissionSet.mockRejectedValueOnce(new Error('firestore down'));
@@ -227,7 +227,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
     });
 
@@ -268,7 +268,7 @@ describe('firebaseAdmin.util', () => {
       env: {
         FIREBASE_PROJECT_ID: 'dnacloud-demo2-t',
         FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.test',
-        FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n',
+        FIREBASE_PRIVATE_KEY: String.raw`-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n`,
       },
       createCustomTokenImpl: async () => {
         throw new Error('boom');

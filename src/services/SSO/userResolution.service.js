@@ -112,7 +112,7 @@ const matchesMapping = (mapping, identity) => {
       // save time — so the lookup itself must be case-insensitive.
       const rawKeys   = identity.raw ? Object.keys(identity.raw) : [];
       const matchedKey = rawKeys.find(k => norm(k) === norm(mapping.mapping_source));
-      const raw = matchedKey !== undefined ? identity.raw[matchedKey] : undefined;
+      const raw = matchedKey === undefined ? undefined : identity.raw[matchedKey];
       if (raw === undefined || raw === null) {
         // The claim name itself isn't present in this token/assertion at
         // all — most likely a typo'd or misconfigured claim name, since a
