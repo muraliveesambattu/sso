@@ -28,12 +28,15 @@ if (IS_PROD) {
 }
 
 // ── PII Masking ───────────────────────────────────────────────────────────────
-// Mask email and OID fields in production to protect user privacy
+// Mask identifying fields in production to protect user privacy. Every
+// identifier the logger can carry must be covered — email, oid AND tenantId —
+// otherwise a field that looks innocuous still pins a log line to one customer.
 const maskPii = format((info) => {
   if (!IS_PROD) return info;
-  if (info.email)   info.email   = maskEmail(info.email);
-  if (info.oid)     info.oid     = '***masked***';
-  if (info.message) info.message = info.message
+  if (info.email)    info.email    = maskEmail(info.email);
+  if (info.oid)      info.oid      = '***masked***';
+  if (info.tenantId) info.tenantId = '***masked***';
+  if (info.message)  info.message  = info.message
     .replaceAll(/[^\s@]+@[^\s@]+/g, '[email]');
   return info;
 });

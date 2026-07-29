@@ -18,32 +18,60 @@ const fieldError = (message, code = 'MISSING_REQUIRED_FIELDS') =>
 // AND format are checked — invalid values must not reach the DB/URL-building
 // layer. OIDC needs tenant_id (used to build the Microsoft token/authorize
 // URLs); SAML has no Azure-tenant field, so it requires sso_url instead.
-const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
+// The per-field checks live in their own functions purely so
+// validateRequiredFields stays within its cognitive complexity budget (S3776).
+// Order of checks — and therefore which error code a bad payload gets — is
+// unchanged from the inline version.
+
+const toDomainList = (domains) => {
+  if (Array.isArray(domains)) return domains;
+  return domains ? [domains] : [];
+};
+
+const validateProtocol = (protocol) => {
   if (!protocol) throw fieldError('protocol is required', 'MISSING_PROTOCOL');
-  let domainList;
-  if (Array.isArray(domains)) domainList = domains;
-  else domainList = domains ? [domains] : [];
-  if (domainList.length === 0) throw fieldError('domains is required', 'MISSING_DOMAINS');
-  if (!ALLOWED_PROTOCOLS.includes(protocol)) {
-    throw fieldError(`protocol must be one of: ${ALLOWED_PROTOCOLS.join(', ')}`, 'INVALID_PROTOCOL');
-  }
+};
+
+// Format only — the caller checks emptiness first, so that MISSING_DOMAINS is
+// reported ahead of INVALID_PROTOCOL exactly as the inline version did.
+const validateDomainFormat = (domainList) => {
   for (const d of domainList) {
     if (!DOMAIN_RE.test(d)) {
       throw fieldError('domains must be valid domain names (e.g. example.com)', 'INVALID_DOMAINS');
     }
   }
-  if (protocol === 'oidc') {
-    if (!tenant_id) throw fieldError('tenant_id is required for OIDC', 'MISSING_TENANT_ID');
-    if (!UUID_RE.test(tenant_id) && !TENANT_ALIASES.has(tenant_id)) {
-      throw fieldError('tenant_id must be a valid UUID or common/consumers/organizations', 'INVALID_TENANT_ID');
-    }
+};
+
+// OIDC needs tenant_id (used to build the Microsoft token/authorize URLs).
+const validateOidcFields = (tenant_id) => {
+  if (!tenant_id) throw fieldError('tenant_id is required for OIDC', 'MISSING_TENANT_ID');
+  if (!UUID_RE.test(tenant_id) && !TENANT_ALIASES.has(tenant_id)) {
+    throw fieldError('tenant_id must be a valid UUID or common/consumers/organizations', 'INVALID_TENANT_ID');
   }
-  if (protocol === 'saml') {
-    if (!sso_url) throw fieldError('sso_url is required for SAML', 'MISSING_SSO_URL');
-    if (!URL_RE.test(sso_url)) {
-      throw fieldError('sso_url must be a valid HTTP/HTTPS URL', 'INVALID_SSO_URL');
-    }
+};
+
+// SAML has no Azure-tenant field, so it requires sso_url instead.
+const validateSamlFields = (sso_url) => {
+  if (!sso_url) throw fieldError('sso_url is required for SAML', 'MISSING_SSO_URL');
+  if (!URL_RE.test(sso_url)) {
+    throw fieldError('sso_url must be a valid HTTP/HTTPS URL', 'INVALID_SSO_URL');
   }
+};
+
+const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
+  validateProtocol(protocol);
+
+  const domainList = toDomainList(domains);
+  if (domainList.length === 0) throw fieldError('domains is required', 'MISSING_DOMAINS');
+
+  if (!ALLOWED_PROTOCOLS.includes(protocol)) {
+    throw fieldError(`protocol must be one of: ${ALLOWED_PROTOCOLS.join(', ')}`, 'INVALID_PROTOCOL');
+  }
+
+  validateDomainFormat(domainList);
+
+  if (protocol === 'oidc') validateOidcFields(tenant_id);
+  if (protocol === 'saml') validateSamlFields(sso_url);
 };
 
 // mapping_source may be any Entra claim/attribute name — 'group', 'department',
