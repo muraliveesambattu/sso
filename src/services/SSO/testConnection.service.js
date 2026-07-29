@@ -23,9 +23,6 @@ const fetchJson = (url, options) =>
     const reqOptions = {
       method: options.method || 'GET',
       headers,
-      ...(options.rejectUnauthorized === false
-        ? { agent: new https.Agent({ rejectUnauthorized: false }) }
-        : {}),
     };
 
     const req = https.request(target, reqOptions, (res) => {
@@ -99,6 +96,26 @@ const extractTenantFromSsoUrl = (url) => {
   return match ? match[1].toLowerCase() : null;
 };
 
+// Extracts the per-app id from an Azure SSO URL query string.
+// Azure sets ?appid={app-id} when the application has its own signing cert —
+// that cert only appears in the appid-scoped metadata, never the tenant default.
+const extractAppIdFromSsoUrl = (url) => {
+  if (typeof url !== 'string') return null;
+  const match = url.match(/[?&]appid=([0-9a-f-]{36})\b/i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+// Builds the federation-metadata URL from validated components instead of
+// rewriting the caller's sso_url. The base is a constant and both the tenant and
+// appid are regex-validated UUIDs, so no caller-supplied text reaches the URL
+// path or query (S7044 — path must not be built from user-controlled data).
+const buildSamlMetadataUrl = (sso_url, tenant_id) => {
+  if (!sso_url) return microsoft.samlMetadataUrl(tenant_id);
+  const base  = microsoft.samlMetadataUrl(extractTenantFromSsoUrl(sso_url));
+  const appId = extractAppIdFromSsoUrl(sso_url);
+  return appId ? `${base}?appid=${appId}` : base;
+};
+
 const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
   // Validate tenant ID in SSO URL before fetching metadata
   if (sso_url) {
@@ -108,11 +125,9 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
     }
   }
 
-  const metadataUrl = sso_url
-    ? sso_url.replace('/saml2', '/federationmetadata/2007-06/federationmetadata.xml')
-    : microsoft.samlMetadataUrl(tenant_id);
+  const metadataUrl = buildSamlMetadataUrl(sso_url, tenant_id);
 
-  const res = await fetchJson(metadataUrl, { method: 'GET', rejectUnauthorized: false });
+  const res = await fetchJson(metadataUrl, { method: 'GET' });
   if (res.status !== 200) {
     return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
   }

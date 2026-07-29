@@ -213,7 +213,16 @@ const resolveUser = async (companyId, claims, protocol) => {
     let user = await findUserByOid(companyId, identity.oid);
     let action;
 
-    if (!user) {
+    if (user) {
+      // Re-login — sync roles + update last_login
+      await updateUser(user.user_id || user.id, {
+        roles:        roles.map(r => r.role_id),
+        display_name: identity.displayName || user.display_name,
+        last_login:   new Date().toISOString(),
+      });
+      action = 'updated';
+      logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
+    } else {
       // First login — create user
       user = await createUser({
         user_id:         crypto.randomUUID(),
@@ -228,15 +237,6 @@ const resolveUser = async (companyId, claims, protocol) => {
       });
       action = 'created';
       logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
-    } else {
-      // Re-login — sync roles + update last_login
-      await updateUser(user.user_id || user.id, {
-        roles:        roles.map(r => r.role_id),
-        display_name: identity.displayName || user.display_name,
-        last_login:   new Date().toISOString(),
-      });
-      action = 'updated';
-      logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
     }
 
     return { user, roles, action };

@@ -20,7 +20,9 @@ const fieldError = (message, code = 'MISSING_REQUIRED_FIELDS') =>
 // URLs); SAML has no Azure-tenant field, so it requires sso_url instead.
 const validateRequiredFields = ({ protocol, domains, tenant_id, sso_url }) => {
   if (!protocol) throw fieldError('protocol is required', 'MISSING_PROTOCOL');
-  const domainList = Array.isArray(domains) ? domains : (domains ? [domains] : []);
+  let domainList;
+  if (Array.isArray(domains)) domainList = domains;
+  else domainList = domains ? [domains] : [];
   if (domainList.length === 0) throw fieldError('domains is required', 'MISSING_DOMAINS');
   if (!ALLOWED_PROTOCOLS.includes(protocol)) {
     throw fieldError(`protocol must be one of: ${ALLOWED_PROTOCOLS.join(', ')}`, 'INVALID_PROTOCOL');
@@ -127,13 +129,13 @@ const stripUrlQuery = (url) => {
 // ORM at import time even for callers that never persist.
 const saveToPostgres = async (company_id, fields) => {
   const { saveSsoConfig: pgSave, getSsoIntegrationByDomain } = require('../db/postgresSSO.service');
-  await pgSave({ company_id: company_id, ...fields });
+  await pgSave({ company_id, ...fields });
   // Re-read via any of the saved domains to learn the actual company_id used
   // (the store reuses an existing row's id when a domain already existed).
   const saved = await getSsoIntegrationByDomain(fields.domains[0]);
-  const company_id = saved ? saved.company_id : company_id;
-  logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${company_id}`);
-  return company_id;
+  const resolvedCompanyId = saved ? saved.company_id : company_id;
+  logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${resolvedCompanyId}`);
+  return resolvedCompanyId;
 };
 
 /**

@@ -301,19 +301,46 @@ describe('testConnection.service', () => {
     });
   });
 
-  test('blocks an SSRF attempt: a non-Microsoft sso_url host is rejected before any fetch', async () => {
+  test('blocks an SSRF attempt: a malicious sso_url host never reaches the network', async () => {
     // The tenant-extraction regex only substring-matches "login.microsoftonline.com/{guid}/",
-    // so an attacker can embed that in the PATH while using an internal host. The host-based
-    // SSRF guard in fetchJson must still block it.
+    // so an attacker can embed that in the PATH while using an internal host. The metadata URL
+    // is now rebuilt from the constant Microsoft base + the validated guid, so the attacker's
+    // host is discarded rather than merely rejected — SSRF is impossible by construction.
     const guid = '12345678-1234-1234-1234-123456789abc';
-    const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: '<xml/>' }));
+    const requested = [];
+    mockRequest(https, ({ url }) => {
+      requested.push(url);
+      return { statusCode: 200, body: '<xml/>' };
+    });
 
-    await expect(testConnection({
+    await testConnection({
       protocol: 'saml',
       tenant_id: guid,
       sso_url: `https://internal.evil/login.microsoftonline.com/${guid}/saml2`,
-    })).rejects.toMatchObject({ code: 'OUTBOUND_HOST_NOT_ALLOWED' });
+    });
 
-    expect(httpsSpy).not.toHaveBeenCalled(); // guard rejects before the request is made
+    expect(requested).toHaveLength(1);
+    expect(requested[0]).toContain(`login.microsoftonline.com/${guid}/federationmetadata`);
+    expect(requested[0]).not.toContain('internal.evil');
+  });
+
+  test('preserves ?appid scoping when rebuilding the metadata URL', async () => {
+    // Per-app Entra signing certs appear ONLY in the appid-scoped metadata, never
+    // the tenant default — the rebuild must carry appid through or cert checks break.
+    const guid  = '12345678-1234-1234-1234-123456789abc';
+    const appId = 'abcdef01-2345-6789-abcd-ef0123456789';
+    const requested = [];
+    mockRequest(https, ({ url }) => {
+      requested.push(url);
+      return { statusCode: 200, body: '<xml/>' };
+    });
+
+    await testConnection({
+      protocol: 'saml',
+      tenant_id: guid,
+      sso_url: `https://login.microsoftonline.com/${guid}/saml2?appid=${appId}`,
+    });
+
+    expect(requested[0]).toContain(`?appid=${appId}`);
   });
 });

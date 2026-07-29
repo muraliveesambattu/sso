@@ -178,6 +178,118 @@ const deleteUser = async (userId) => {
 
 // ── Save SSO Config (write path) ──────────────────────────────────────────────
 
+// ── saveSsoConfig steps ───────────────────────────────────────────────────────
+// Each step below is a helper purely so saveSsoConfig stays within its cognitive
+// complexity budget (S3776) — every one is called only from saveSsoConfig, in
+// order, inside its transaction. Behaviour is identical to the inline version.
+
+// company_id is the sole owner/tenant key. Re-saving the same company_id updates
+// its row in place (upsert on the PK) and its domain rows are replaced by
+// replaceDomains — so no separate "owner already has a config" cleanup is
+// needed. Reject only when an incoming domain is already owned by a DIFFERENT
+// company.
+const assertDomainsAvailable = async (domainList, company_id, tx) => {
+  const existingDomain = await SsoDomain.findOne({
+    where: { domain: { [Op.in]: domainList } },
+    transaction: tx,
+  });
+  if (existingDomain && existingDomain.company_id !== company_id) {
+    const conflictErr = new Error('Domain is already configured by another organisation');
+    conflictErr.statusCode = 409;
+    conflictErr.code = 'DOMAIN_ALREADY_EXISTS';
+    throw conflictErr;
+  }
+};
+
+// Replace the company's domain rows with the incoming set.
+const replaceDomains = async (company_id, domainList, tx) => {
+  await SsoDomain.destroy({ where: { company_id }, transaction: tx });
+  await SsoDomain.bulkCreate(
+    domainList.map(domain => ({ company_id, domain })),
+    { transaction: tx },
+  );
+};
+
+const upsertOidcConfig = async ({
+  company_id, client_id, auth_method, client_secret, redirect_uri,
+  private_key_b64, client_cert_thumbprint, keep_existing_cert,
+}, tx) => {
+  // Encrypt the client secret before storing — never stored as plain text
+  const encryptedSecret = client_secret ? encrypt(client_secret) : null;
+  logger.debug(`[POSTGRES] Client secret encrypted for storage | company_id: ${company_id}`);
+
+  // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest.
+  // When keep_existing_cert=true and no new key was extracted, reuse what's in the DB.
+  let encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
+  let resolvedThumbprint  = client_cert_thumbprint || null;
+  if (keep_existing_cert && !private_key_b64) {
+    const existingOidc = await OidcConfiguration.findOne({ where: { company_id }, transaction: tx });
+    if (existingOidc) {
+      encryptedPrivateKey = existingOidc.private_key_enc;
+      resolvedThumbprint  = existingOidc.client_cert_thumbprint;
+      logger.debug(`[POSTGRES] Reusing existing private key for company_id: ${company_id}`);
+    }
+  } else if (encryptedPrivateKey) {
+    logger.debug(`[POSTGRES] Private key encrypted for storage | company_id: ${company_id}`);
+  }
+
+  await OidcConfiguration.upsert({
+    company_id,
+    client_id,
+    client_auth_method:     auth_method,
+    client_secret_enc:      encryptedSecret,
+    private_key_enc:        encryptedPrivateKey,
+    client_cert_thumbprint: resolvedThumbprint,
+    scope:                  defaults.OIDC_SCOPE,
+    redirect_uri:           redirect_uri || defaults.OIDC_REDIRECT_URI,
+  }, { transaction: tx });
+};
+
+const upsertSamlConfig = async ({
+  company_id, entity_id, sso_url, acs_url, certificate, cert_expiry,
+  sign_auth, keep_existing_cert,
+}, tx) => {
+  // When keep_existing_cert=true and no new cert uploaded, reuse the existing IdP cert
+  let resolvedCert = certificate || null;
+  if (keep_existing_cert && !certificate) {
+    const existingSaml = await SamlConfiguration.findOne({ where: { company_id }, transaction: tx });
+    if (existingSaml) {
+      resolvedCert = existingSaml.certificate;
+      logger.debug(`[POSTGRES] Reusing existing SAML cert for company_id: ${company_id}`);
+    }
+  }
+  await SamlConfiguration.upsert({
+    company_id,
+    entity_id:   entity_id || defaults.SAML_ENTITY_ID,
+    sso_url,
+    acs_url:     acs_url   || defaults.SAML_ACS_URL,
+    certificate: resolvedCert,
+    cert_expiry: cert_expiry || null,
+    sign_authn_request: sign_auth || false,
+  }, { transaction: tx });
+};
+
+const replaceJitMappings = async (company_id, jit_enabled, jit_mappings, tx) => {
+  await JitMapping.destroy({ where: { company_id }, transaction: tx });
+  if (jit_enabled && jit_mappings?.length) {
+    const rows = jit_mappings
+      .filter(m => m.zdna_role && m.mapping_source)
+      .map((m, i) => ({
+        company_id,
+        mapping_source: m.mapping_source,
+        mapping_value:  m.mapping_value || null,
+        role_id:        m.zdna_role,
+        // role_name is stored on the mapping so the login/config-view flow
+        // reads it directly (no zdna_roles JOIN). Falls back to the id when
+        // the caller sends only the role identifier.
+        role_name:      m.role_name || m.zdna_role,
+        priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
+        status:         'active',
+      }));
+    await JitMapping.bulkCreate(rows, { transaction: tx });
+  }
+};
+
 const saveSsoConfig = async ({
   company_id, protocol, idp, domains, tenant_id, entra_tenant_id,
   client_id, auth_method, client_secret, redirect_uri,
@@ -193,21 +305,8 @@ const saveSsoConfig = async ({
   const sequelize = require('../../config/db');
   const tx = await sequelize.transaction();
   try {
-    // company_id is the sole owner/tenant key. Re-saving the same company_id
-    // updates its row in place (upsert on the PK) and its domain rows are
-    // replaced below — so no separate "owner already has a config" cleanup is
-    // needed. Reject only when an incoming domain is already owned by a
-    // DIFFERENT company.
-    const existingDomain = await SsoDomain.findOne({
-      where: { domain: { [Op.in]: domainList } },
-      transaction: tx,
-    });
-    if (existingDomain && existingDomain.company_id !== company_id) {
-      const conflictErr = new Error('Domain is already configured by another organisation');
-      conflictErr.statusCode = 409;
-      conflictErr.code = 'DOMAIN_ALREADY_EXISTS';
-      throw conflictErr;
-    }
+    // 1 — domain ownership + integration row + domain rows
+    await assertDomainsAvailable(domainList, company_id, tx);
 
     // upsert sso_integrations (update if exists, insert if not)
     await SsoIntegration.upsert({
@@ -219,86 +318,25 @@ const saveSsoConfig = async ({
       jit_status:      !!jit_enabled,
     }, { transaction: tx });
 
-    // replace the company's domain rows with the incoming set
-    await SsoDomain.destroy({ where: { company_id }, transaction: tx });
-    await SsoDomain.bulkCreate(
-      domainList.map(domain => ({ company_id, domain })),
-      { transaction: tx },
-    );
+    await replaceDomains(company_id, domainList, tx);
 
     // 2 — upsert protocol-specific config
     if (protocol === 'oidc') {
-      // Encrypt the client secret before storing — never stored as plain text
-      const encryptedSecret = client_secret ? encrypt(client_secret) : null;
-      logger.debug(`[POSTGRES] Client secret encrypted for storage | company_id: ${company_id}`);
-
-      // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest.
-      // When keep_existing_cert=true and no new key was extracted, reuse what's in the DB.
-      let encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
-      let resolvedThumbprint  = client_cert_thumbprint || null;
-      if (keep_existing_cert && !private_key_b64) {
-        const existingOidc = await OidcConfiguration.findOne({ where: { company_id }, transaction: tx });
-        if (existingOidc) {
-          encryptedPrivateKey = existingOidc.private_key_enc;
-          resolvedThumbprint  = existingOidc.client_cert_thumbprint;
-          logger.debug(`[POSTGRES] Reusing existing private key for company_id: ${company_id}`);
-        }
-      } else if (encryptedPrivateKey) {
-        logger.debug(`[POSTGRES] Private key encrypted for storage | company_id: ${company_id}`);
-      }
-
-      await OidcConfiguration.upsert({
-        company_id,
-        client_id,
-        client_auth_method:     auth_method,
-        client_secret_enc:      encryptedSecret,
-        private_key_enc:        encryptedPrivateKey,
-        client_cert_thumbprint: resolvedThumbprint,
-        scope:                  defaults.OIDC_SCOPE,
-        redirect_uri:           redirect_uri || defaults.OIDC_REDIRECT_URI,
-      }, { transaction: tx });
+      await upsertOidcConfig({
+        company_id, client_id, auth_method, client_secret, redirect_uri,
+        private_key_b64, client_cert_thumbprint, keep_existing_cert,
+      }, tx);
     }
 
     if (protocol === 'saml') {
-      // When keep_existing_cert=true and no new cert uploaded, reuse the existing IdP cert
-      let resolvedCert = certificate || null;
-      if (keep_existing_cert && !certificate) {
-        const existingSaml = await SamlConfiguration.findOne({ where: { company_id }, transaction: tx });
-        if (existingSaml) {
-          resolvedCert = existingSaml.certificate;
-          logger.debug(`[POSTGRES] Reusing existing SAML cert for company_id: ${company_id}`);
-        }
-      }
-      await SamlConfiguration.upsert({
-        company_id,
-        entity_id:   entity_id || defaults.SAML_ENTITY_ID,
-        sso_url,
-        acs_url:     acs_url   || defaults.SAML_ACS_URL,
-        certificate: resolvedCert,
-        cert_expiry: cert_expiry || null,
-        sign_authn_request: sign_auth || false,
-      }, { transaction: tx });
+      await upsertSamlConfig({
+        company_id, entity_id, sso_url, acs_url, certificate, cert_expiry,
+        sign_auth, keep_existing_cert,
+      }, tx);
     }
 
     // 3 — replace jit_mappings
-    await JitMapping.destroy({ where: { company_id }, transaction: tx });
-    if (jit_enabled && jit_mappings?.length) {
-      const rows = jit_mappings
-        .filter(m => m.zdna_role && m.mapping_source)
-        .map((m, i) => ({
-          company_id,
-          mapping_source: m.mapping_source,
-          mapping_value:  m.mapping_value || null,
-          role_id:        m.zdna_role,
-          // role_name is stored on the mapping so the login/config-view flow
-          // reads it directly (no zdna_roles JOIN). Falls back to the id when
-          // the caller sends only the role identifier.
-          role_name:      m.role_name || m.zdna_role,
-          priority:       m.priority ?? i + 1,   // normalised upstream (honours frontend `order`)
-          status:         'active',
-        }));
-      await JitMapping.bulkCreate(rows, { transaction: tx });
-    }
+    await replaceJitMappings(company_id, jit_enabled, jit_mappings, tx);
 
     await tx.commit();
     logger.debug(`[POSTGRES] SSO config saved | company_id: ${company_id}`);
