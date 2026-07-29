@@ -46,6 +46,30 @@ const ALLOWED_PREFIXES = [
 // must not be reachable through the authenticated gateway.
 const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-connection/oidc/callback']
 
+// Resolves the proxy target against the fixed SSO base.
+//
+// Using the WHATWG URL parser instead of string concatenation is what makes the
+// forwarding safe: an absolute or protocol-relative originalUrl (e.g.
+// "//evil.example/x") resolves to a DIFFERENT origin, which the check below
+// rejects, and "../" traversal is normalised before the prefix allowlist sees
+// it. Crucially the allowlist is applied to the RESOLVED pathname, so the value
+// that gets validated is exactly the value that gets requested — the previous
+// code validated req.path but proxied req.originalUrl.
+//
+// Returns null when the request must not be forwarded.
+const resolveProxyTarget = (originalUrl) => {
+    try {
+        const base = new URL(SSO_BASE_URL)
+        const target = new URL(originalUrl, base)
+        if (target.origin !== base.origin) return null
+        if (!ALLOWED_PREFIXES.some((p) => target.pathname.startsWith(p))) return null
+        if (BLOCKED_PATHS.some((p) => target.pathname.startsWith(p))) return null
+        return target
+    } catch {
+        return null   // unparseable path, or SSO_BASE_URL missing/malformed
+    }
+}
+
 const app = createExpressApp('ssoGatewayApp')
 
 // Lightweight liveness probe — no auth, no proxying. Lets smoke tests and
@@ -57,9 +81,9 @@ app.get('/gateway/health', (req, res) => {
 
 app.all('*', async (req, res) => {
     // 1. Route allowlist — anything not on the admin surface is not served here.
-    const allowed = ALLOWED_PREFIXES.some((p) => req.path.startsWith(p))
-    const blocked = BLOCKED_PATHS.some((p) => req.path.startsWith(p))
-    if (!allowed || blocked) {
+    //    Resolving up front also yields the exact URL we will request in step 3.
+    const target = resolveProxyTarget(req.originalUrl)
+    if (!target) {
         log('INFO', 'Inside ssoGateway, unknown route rejected: ' + req.path)
         return res.status(404).json({ success: false, error: { code: 'UNKNOWN_ROUTE' } })
     }
@@ -80,7 +104,7 @@ app.all('*', async (req, res) => {
     try {
         const response = await axios({
             method: req.method,
-            url: SSO_BASE_URL + req.originalUrl,   // originalUrl keeps path + query string
+            url: target.toString(),   // fixed origin + allowlisted path, query preserved
             headers: {
                 'Content-Type': 'application/json',
                 'X-Admin-API-Key': SSO_ADMIN_API_KEY,
