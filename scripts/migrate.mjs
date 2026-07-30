@@ -5,17 +5,28 @@
  * Safe to run multiple times — migrations track state in `sequelize_meta` table.
  *
  * Usage:
- *   node scripts/migrate.js           ← run pending migrations + seed
- *   node scripts/migrate.js --seed    ← also run seeders explicitly
+ *   node scripts/migrate.mjs           ← run pending migrations + seed
+ *   node scripts/migrate.mjs --seed    ← also run seeders explicitly
  *
  * Called automatically by:
  *   - npm run migrate
  */
 
-require('dotenv').config();
-const { Sequelize } = require('sequelize');
-const { Umzug, SequelizeStorage } = require('umzug');
-const path = require('node:path');
+import dotenv from 'dotenv';
+import { Sequelize } from 'sequelize';
+import { Umzug, SequelizeStorage } from 'umzug';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+dotenv.config();
+
+// The migration and seeder files are CommonJS (`module.exports = { up, down }`)
+// and Umzug's resolve() loads them synchronously. createRequire keeps that
+// working from an ES module: dynamic import() would force resolve() to become
+// async and would need pathToFileURL() to accept a Windows path.
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── DB Connection ─────────────────────────────────────────────────────────────
 const sequelize = process.env.DATABASE_URL
@@ -109,4 +120,11 @@ async function run() {
   }
 }
 
-run();
+// Top-level await (ESM) — no wrapper call. run() reports its own errors and exits;
+// anything thrown outside it is caught here.
+try {
+  await run();
+} catch (error) {
+  console.error(error);
+  process.exit(1);
+}

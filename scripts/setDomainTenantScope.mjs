@@ -1,5 +1,5 @@
 /**
- * setDomainTenantScope.js
+ * setDomainTenantScope.mjs
  *
  * General-purpose script to update entra_tenant_id for any domain in Firestore.
  * This single field controls which Microsoft users can authenticate for that domain:
@@ -12,31 +12,37 @@
  *   https://login.microsoftonline.com/<entra_tenant_id>/oauth2/v2.0/authorize
  *
  * Usage:
- *   node scripts/setDomainTenantScope.js <domain> <tenantId>
+ *   node scripts/setDomainTenantScope.mjs <domain> <tenantId>
  *
  * Examples:
- *   node scripts/setDomainTenantScope.js gmail.com consumers
- *   node scripts/setDomainTenantScope.js yahoo.com consumers
- *   node scripts/setDomainTenantScope.js zebra.com common
- *   node scripts/setDomainTenantScope.js zebra.com 00000000-0000-0000-0000-000000000000
+ *   node scripts/setDomainTenantScope.mjs gmail.com consumers
+ *   node scripts/setDomainTenantScope.mjs yahoo.com consumers
+ *   node scripts/setDomainTenantScope.mjs zebra.com common
+ *   node scripts/setDomainTenantScope.mjs zebra.com 00000000-0000-0000-0000-000000000000
  *
  * Azure requirement when using 'consumers' or 'common':
  *   Azure Portal → App Registrations → <your app> → Authentication
  *   → Supported account types → select the appropriate option → Save
  */
 
-require('dotenv').config();
-const { db } = require('../src/config/firestore');
+import dotenv from 'dotenv';
+// NOTE: src/config/firestore does not exist in this repository (no git history for
+// it), so this script has never been runnable here. Left wired as-is pending that
+// module being ported in.
+import firestore from '../src/config/firestore.js';
+
+dotenv.config();
+const { db } = firestore;
 
 // ── Validate CLI args ─────────────────────────────────────────────────────────
 
 const [,, domain, tenantId] = process.argv;
 
 if (!domain || !tenantId) {
-  console.error('\nUsage: node scripts/setDomainTenantScope.js <domain> <tenantId>');
+  console.error('\nUsage: node scripts/setDomainTenantScope.mjs <domain> <tenantId>');
   console.error('\nExamples:');
-  console.error('  node scripts/setDomainTenantScope.js gmail.com consumers');
-  console.error('  node scripts/setDomainTenantScope.js zebra.com 00000000-0000-0000-0000-000000000000\n');
+  console.error('  node scripts/setDomainTenantScope.mjs gmail.com consumers');
+  console.error('  node scripts/setDomainTenantScope.mjs zebra.com 00000000-0000-0000-0000-000000000000\n');
   process.exit(1);
 }
 
@@ -115,7 +121,10 @@ const update = async () => {
   process.exit(0);
 };
 
-update().catch((err) => {
-  console.error(`\n❌ Failed: ${err.message}`);
+// Top-level await (ESM) — no promise chain.
+try {
+  await update();
+} catch (error) {
+  console.error(`\n❌ Failed: ${error.message}`);
   process.exit(1);
-});
+}

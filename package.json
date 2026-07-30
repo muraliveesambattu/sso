@@ -9,7 +9,7 @@
     "test:coverage": "jest --coverage",
     "start": "nodemon server.js",
     "dev": "concurrently -n server,client -c blue,green \"nodemon server.js\" \"npm run dev --prefix client\"",
-    "migrate": "node scripts/migrate.js",
+    "migrate": "node scripts/migrate.mjs",
     "migrate:status": "npx sequelize-cli db:migrate:status --config src/config/database.js --migrations-path src/database/migrations",
     "migrate:undo": "npx sequelize-cli db:migrate:undo --config src/config/database.js --migrations-path src/database/migrations",
     "migrate:undo:all": "npx sequelize-cli db:migrate:undo:all --config src/config/database.js --migrations-path src/database/migrations",

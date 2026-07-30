@@ -9,26 +9,32 @@
  * (the `pg` driver needs the socket dir in `host`, not a `socketPath` option).
  *
  * Usage (any of):
- *   node scripts/testDbConnection.js                       # uses repo-root .env
- *   node scripts/testDbConnection.js 'postgresql://...'    # pass URL as arg
- *   DATABASE_URL='postgresql://...' node scripts/testDbConnection.js
+ *   node scripts/testDbConnection.mjs                       # uses repo-root .env
+ *   node scripts/testDbConnection.mjs 'postgresql://...'    # pass URL as arg
+ *   DATABASE_URL='postgresql://...' node scripts/testDbConnection.mjs
  *
  * NOTE: this connects the SAME way the app does, so it only succeeds from an
  * environment that can actually reach the instance (inside the VPC / Cloud Run).
  * From your Mac or Cloud Shell it will ETIMEDOUT against a private-only instance.
  */
 
-const path = require('node:path');
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+import pg from 'pg';
+
+const { Client } = pg;   // pg is CommonJS — take Client off the default export
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 // Load .env from the repo root regardless of the current working directory,
-// so `node scripts/testDbConnection.js` works the same as running from scripts/.
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
-const { Client } = require('pg');
+// so `node scripts/testDbConnection.mjs` works the same as running from scripts/.
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const TIMEOUT_MS = 10000;
 
 function buildConfig() {
   // Allow passing the connection string as the first CLI arg:
-  //   node scripts/testDbConnection.js 'postgresql://...'
+  //   node scripts/testDbConnection.mjs 'postgresql://...'
   const url = process.argv[2] || process.env.DATABASE_URL;
 
   if (url) {
@@ -69,7 +75,10 @@ function buildConfig() {
   };
 }
 
-(async () => {
+// buildConfig() is called in here rather than at module scope so that a malformed
+// DATABASE_URL (new URL() throws) is reported by the top-level handler below
+// instead of surfacing as a raw unhandled rejection.
+async function run() {
   const { mode, ...config } = buildConfig();
   console.log('--- DB connection test ---');
   console.log('Connecting via:', mode);
@@ -101,4 +110,12 @@ function buildConfig() {
   } finally {
     await client.end().catch(() => {});
   }
-})();
+}
+
+// Top-level await (ESM) — matches S7785's compliant form.
+try {
+  await run();
+} catch (error) {
+  console.error(error);
+  process.exit(1);
+}
