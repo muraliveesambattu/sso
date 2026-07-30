@@ -31,6 +31,24 @@ const { STATUS } = require('../util/constant')   // isAuthenticatedHSTS returns 
 const SSO_BASE_URL = process.env.SSO_BASE_URL
 const SSO_ADMIN_API_KEY = process.env.SSO_ADMIN_API_KEY
 
+// Parsed once at cold start rather than on every request. If SSO_BASE_URL is
+// missing or malformed, SSO_BASE stays null, SSO_ALLOWED_HOSTS is empty, and
+// every proxy attempt fails closed on the host check below.
+const parseBaseUrl = (raw) => {
+    try {
+        return new URL(raw)
+    } catch (err) {
+        log('ERROR', 'Inside ssoGateway, SSO_BASE_URL is missing or malformed: ' + err.message)
+        return null
+    }
+}
+const SSO_BASE = parseBaseUrl(SSO_BASE_URL)
+
+// Pre-approved scheme + host for the proxy target — the CWE-918 allowlist that
+// the request site checks immediately before calling axios.
+const SSO_ALLOWED_SCHEMES = ['https:']
+const SSO_ALLOWED_HOSTS = SSO_BASE ? [SSO_BASE.hostname] : []
+
 // Admin surface of the SSO microservice — the ONLY routes this gateway serves.
 // Covers both the /auth and /v1/auth mounts of the microservice router.
 const ALLOWED_PREFIXES = [
@@ -56,17 +74,21 @@ const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-con
 // that gets validated is exactly the value that gets requested — the previous
 // code validated req.path but proxied req.originalUrl.
 //
-// Returns null when the request must not be forwarded.
-const resolveProxyTarget = (originalUrl) => {
+// Returns the normalised "pathname + query" to proxy, or null when the request
+// must not be forwarded. Returning a PATH (not a URL) keeps the target's origin
+// entirely in the caller's hands — it rebuilds the URL from SSO_BASE itself, so
+// no host or scheme can travel out of this function.
+const resolveProxyPath = (originalUrl) => {
+    if (!SSO_BASE) return null            // misconfigured environment — fail closed
     try {
-        const base = new URL(SSO_BASE_URL)
-        const target = new URL(originalUrl, base)
-        if (target.origin !== base.origin) return null
-        if (!ALLOWED_PREFIXES.some((p) => target.pathname.startsWith(p))) return null
-        if (BLOCKED_PATHS.some((p) => target.pathname.startsWith(p))) return null
-        return target
-    } catch {
-        return null   // unparseable path, or SSO_BASE_URL missing/malformed
+        const candidate = new URL(originalUrl, SSO_BASE)
+        if (candidate.origin !== SSO_BASE.origin) return null
+        if (!ALLOWED_PREFIXES.some((p) => candidate.pathname.startsWith(p))) return null
+        if (BLOCKED_PATHS.some((p) => candidate.pathname.startsWith(p))) return null
+        return candidate.pathname + candidate.search
+    } catch (err) {
+        log('INFO', 'Inside ssoGateway, unparseable request path: ' + err.message)
+        return null
     }
 }
 
@@ -82,8 +104,8 @@ app.get('/gateway/health', (req, res) => {
 app.all('*', async (req, res) => {
     // 1. Route allowlist — anything not on the admin surface is not served here.
     //    Resolving up front also yields the exact URL we will request in step 3.
-    const target = resolveProxyTarget(req.originalUrl)
-    if (!target) {
+    const proxyPath = resolveProxyPath(req.originalUrl)
+    if (!proxyPath) {
         log('INFO', 'Inside ssoGateway, unknown route rejected: ' + req.path)
         return res.status(404).json({ success: false, error: { code: 'UNKNOWN_ROUTE' } })
     }
@@ -101,28 +123,41 @@ app.all('*', async (req, res) => {
     }
 
     // 3. Proxy to the SSO microservice with the admin key attached.
-    try {
-        const response = await axios({
-            method: req.method,
-            url: target.toString(),   // fixed origin + allowlisted path, query preserved
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-API-Key': SSO_ADMIN_API_KEY,
-                // isAuthenticatedHSTS does not return the decoded identity, so we
-                // can't forward the user's email here. Use isAuthenticatedHSTSCheck
-                // (with a userId) if per-user audit attribution is needed later.
-                'X-Forwarded-User': 'console-user'
-            },
-            data: ['GET', 'HEAD', 'DELETE'].includes(req.method) ? undefined : req.body,
-            timeout: 30000,
-            validateStatus: () => true   // relay SSO service statuses (4xx/5xx) as-is
-        })
-        log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + req.path + ' -> ' + response.status)
-        return res.status(response.status).json(response.data)
-    } catch (err) {
-        log('ERROR', 'Inside ssoGateway, upstream unreachable: ' + err.message)
-        return res.status(502).json({ success: false, error: { code: 'UPSTREAM_UNREACHABLE' } })
+    //    The target URL is BUILT here, from the constant SSO_BASE plus the
+    //    already-allowlisted path, and its scheme + host are checked against the
+    //    pre-approved lists immediately before the request — which is made only
+    //    inside that branch. Construction, validation and use all sit in this one
+    //    scope so the guarantee is verifiable without following a helper
+    //    (CWE-918 / S5144).
+    const url = new URL(proxyPath, SSO_BASE)
+
+    if (SSO_ALLOWED_SCHEMES.includes(url.protocol) && SSO_ALLOWED_HOSTS.includes(url.hostname)) {
+        try {
+            const response = await axios({
+                method: req.method,
+                url: url.toString(),   // fixed origin + allowlisted path, query preserved
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Admin-API-Key': SSO_ADMIN_API_KEY,
+                    // isAuthenticatedHSTS does not return the decoded identity, so we
+                    // can't forward the user's email here. Use isAuthenticatedHSTSCheck
+                    // (with a userId) if per-user audit attribution is needed later.
+                    'X-Forwarded-User': 'console-user'
+                },
+                data: ['GET', 'HEAD', 'DELETE'].includes(req.method) ? undefined : req.body,
+                timeout: 30000,
+                validateStatus: () => true   // relay SSO service statuses (4xx/5xx) as-is
+            })
+            log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + req.path + ' -> ' + response.status)
+            return res.status(response.status).json(response.data)
+        } catch (err) {
+            log('ERROR', 'Inside ssoGateway, upstream unreachable: ' + err.message)
+            return res.status(502).json({ success: false, error: { code: 'UPSTREAM_UNREACHABLE' } })
+        }
     }
+
+    log('ERROR', 'Inside ssoGateway, refusing target outside the allowlist: ' + url.origin)
+    return res.status(400).json({ success: false, error: { code: 'INVALID_PROXY_TARGET' } })
 })
 
 module.exports.ssoGateway = onRequest(app)
