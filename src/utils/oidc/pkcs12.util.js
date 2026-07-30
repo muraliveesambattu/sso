@@ -86,7 +86,7 @@ const extractFromPkcs12 = async (base64Pfx, password) => {
 
   // Unique env var name per invocation — prevents password leakage between
   // concurrent requests sharing the same process environment snapshot.
-  const passKey = `PFX_PASS_${crypto.randomUUID().replaceAll(/-/g, '')}`;
+  const passKey = `PFX_PASS_${crypto.randomUUID().replaceAll('-', '')}`;
   const pass    = password || '';
 
   // ── Private key ──────────────────────────────────────────────────────────────

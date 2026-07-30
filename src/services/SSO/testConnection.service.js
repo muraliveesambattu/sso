@@ -149,8 +149,8 @@ const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
     // Frontend sends certificate as base64(PEM string) — decode first to get PEM, then strip headers
     const pemString = Buffer.from(certificate, 'base64').toString('utf8');
     const uploadedCert = pemString
-      .replaceAll(/-----BEGIN CERTIFICATE-----/g, '')
-      .replaceAll(/-----END CERTIFICATE-----/g, '')
+      .replaceAll('-----BEGIN CERTIFICATE-----', '')
+      .replaceAll('-----END CERTIFICATE-----', '')
       .replaceAll(/\s+/g, '');
     if (!azureCerts.includes(uploadedCert)) {
       return { success: false, message: 'Certificate does not match Azure tenant signing certificate' };
