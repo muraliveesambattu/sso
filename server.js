@@ -133,39 +133,53 @@ app.use(errorHandler);
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
 
-  const server = app.listen(PORT, () =>
-    logger.info(`SSO Microservice started`, { action: 'server_start', port: PORT, node_env: process.env.NODE_ENV || 'development' })
-  );
-
   // ── DB Connection Check — retry with exponential back-off ───────────────────
   // A brief PostgreSQL blip at startup would silently degrade all DB-backed SSO
   // lookups for the lifetime of the instance without retry protection.
-  if (dbConfigured) {
+  //
+  // A named function invoked from the listen callback, rather than a top-level
+  // async IIFE (S7785). It is deliberately NOT awaited: the server must accept
+  // connections immediately, so this runs in the background once the port is
+  // bound. Top-level await is not an option here either — this file is CommonJS
+  // and is required by index.js for the Cloud Function.
+  const connectWithRetry = async () => {
     const sequelizeCheck = require('./src/config/db');
-    (async () => {
-      const MAX_ATTEMPTS = 5;
-      let delay = 1000;
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        try {
-          await sequelizeCheck.authenticate();
-          logger.info('Database connected successfully', { action: 'db_connected', attempt });
-          return;
-        } catch (err) {
-          if (attempt === MAX_ATTEMPTS) {
-            logger.error('Database connection failed after all retries — DB-backed SSO degraded', {
-              action: 'db_connection_failed', error: err.message, attempts: MAX_ATTEMPTS,
-            });
-            return;
-          }
-          logger.warn(`DB connect attempt ${attempt}/${MAX_ATTEMPTS} failed — retrying in ${delay}ms`, {
-            action: 'db_connect_retry', attempt, delay, error: err.message,
+    const MAX_ATTEMPTS = 5;
+    let delay = 1000;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await sequelizeCheck.authenticate();
+        logger.info('Database connected successfully', { action: 'db_connected', attempt });
+        return;
+      } catch (err) {
+        if (attempt === MAX_ATTEMPTS) {
+          logger.error('Database connection failed after all retries — DB-backed SSO degraded', {
+            action: 'db_connection_failed', error: err.message, attempts: MAX_ATTEMPTS,
           });
-          await new Promise(r => setTimeout(r, delay));
-          delay = Math.min(delay * 2, 30000);
+          return;
         }
+        logger.warn(`DB connect attempt ${attempt}/${MAX_ATTEMPTS} failed — retrying in ${delay}ms`, {
+          action: 'db_connect_retry', attempt, delay, error: err.message,
+        });
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 30000);
       }
-    })();
-  }
+    }
+  };
+
+  const server = app.listen(PORT, () => {
+    logger.info(`SSO Microservice started`, { action: 'server_start', port: PORT, node_env: process.env.NODE_ENV || 'development' });
+
+    // Fire-and-forget once we are accepting connections. connectWithRetry handles
+    // its own failures; the .catch is a safety net for anything unexpected (e.g.
+    // the db module failing to load) so it can never become an unhandled rejection.
+    if (dbConfigured) {
+      connectWithRetry().catch((err) =>
+        logger.error('DB connection check failed unexpectedly', {
+          action: 'db_connect_crashed', error: err.message,
+        }));
+    }
+  });
 
   // ── Graceful Shutdown ───────────────────────────────────────────────────────
   // On SIGTERM (Cloud Run / process stop):
