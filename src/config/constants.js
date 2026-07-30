@@ -27,16 +27,24 @@ const microsoft = {
   stsBase:   MS_STS_BASE,
 
   // OAuth2 / OIDC
-  tokenUrl:     (tenant) => `${MS_LOGIN_BASE}/${tenant}/oauth2/v2.0/token`,
-  authorizeUrl: (tenant) => `${MS_LOGIN_BASE}/${tenant}/oauth2/v2.0/authorize`,
-  discoveryUrl: (tenant) => `${MS_LOGIN_BASE}/${tenant}/v2.0/.well-known/openid-configuration`,
-  jwksUrl:      (tenant) => `${MS_LOGIN_BASE}/${tenant}/discovery/v2.0/keys`,
-  issuer:       (tenant) => `${MS_LOGIN_BASE}/${tenant}/v2.0`,
+  //
+  // `tenant` is caller-supplied (tenant_id from a request body), so every builder
+  // percent-encodes it before interpolation: encodeURIComponent escapes '/' to
+  // '%2F', which collapses any traversal attempt ("common/../x") into a single
+  // inert path segment. Valid Entra tenants — a GUID or common/consumers/
+  // organizations — contain no encodable characters, so this is a no-op for every
+  // legitimate value. Prevents CWE-22 path traversal at the point of construction
+  // rather than relying only on the upstream format check (S7044).
+  tokenUrl:     (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/oauth2/v2.0/token`,
+  authorizeUrl: (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/oauth2/v2.0/authorize`,
+  discoveryUrl: (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/v2.0/.well-known/openid-configuration`,
+  jwksUrl:      (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/discovery/v2.0/keys`,
+  issuer:       (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/v2.0`,
 
   // SAML
-  samlMetadataUrl: (tenant) => `${MS_LOGIN_BASE}/${tenant}/federationmetadata/2007-06/federationmetadata.xml`,
-  samlSsoUrl:      (tenant) => `${MS_LOGIN_BASE}/${tenant}/saml2`,
-  samlIssuer:      (tenant) => `${MS_STS_BASE}/${tenant}/`,
+  samlMetadataUrl: (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/federationmetadata/2007-06/federationmetadata.xml`,
+  samlSsoUrl:      (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/saml2`,
+  samlIssuer:      (tenant) => `${MS_STS_BASE}/${encodeURIComponent(tenant)}/`,
 
   // Microsoft Graph
   graphMemberOf: `${MS_GRAPH_BASE}/v1.0/me/memberOf?$select=id,securityEnabled`,
