@@ -223,8 +223,25 @@ const buildOidcTestSession = async ({ tenant_id, client_id, client_secret, auth_
   };
 };
 
+// tenant_id gets interpolated into Microsoft URL PATHS (tokenUrl/discoveryUrl/
+// authorizeUrl/samlMetadataUrl). Without a format check a value like
+// "common/../x" would steer the request path anywhere on the (allowlisted)
+// Microsoft host — S7044. Same vocabulary as saveSsoConfig's validation:
+// an Entra tenant GUID or one of the documented aliases. After this check no
+// path metacharacter can survive, so every URL built from tenant_id is inert.
+const UUID_RE        = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TENANT_SCOPES  = new Set(['common', 'consumers', 'organizations']);
+const isValidTenantScope = (tenant_id) =>
+  typeof tenant_id === 'string' && (UUID_RE.test(tenant_id) || TENANT_SCOPES.has(tenant_id));
+
 const testConnection = async (payload) => {
   const { protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope } = payload;
+
+  // Single gate for every URL built from tenant_id below (absent is fine —
+  // SAML with an sso_url derives its tenant from the URL's validated GUID).
+  if (tenant_id && !isValidTenantScope(tenant_id)) {
+    return { success: false, message: 'tenant_id must be a valid UUID or common/consumers/organizations' };
+  }
 
   if (protocol === 'oidc') {
     // Phase 1 — server-side credential pre-check

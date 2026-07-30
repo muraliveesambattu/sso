@@ -78,7 +78,7 @@ describe('testConnection.service', () => {
     jest.spyOn(crypto, 'randomBytes').mockReturnValue(Buffer.from('code-verifier-seed'));
 
     const httpsSpy = mockRequest(https, ({ url, body }) => {
-      expect(url).toBe('https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token');
+      expect(url).toBe('https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token');
       expect(body).toContain('grant_type=client_credentials');
       expect(body).toContain('client_id=client-1');
       expect(body).toContain('client_secret=secret-1');
@@ -91,7 +91,7 @@ describe('testConnection.service', () => {
     const result = await testConnection({
       protocol: 'oidc',
       auth_method: 'client_secret_post',
-      tenant_id: 'tenant-1',
+      tenant_id: '11111111-1111-1111-1111-111111111111',
       client_id: 'client-1',
       client_secret: 'secret-1',
       scope: 'openid profile email',
@@ -107,7 +107,7 @@ describe('testConnection.service', () => {
         sessionRef: 'session-ref',
         config: expect.objectContaining({
           client_id: 'client-1',
-          sso_url: 'https://login.microsoftonline.com/tenant-1/oauth2/v2.0/authorize',
+          sso_url: 'https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/authorize',
           redirect_uri: 'http://localhost:3000/auth/oidc/callback',
           state: 'state-1',
           nonce: 'nonce-1',
@@ -194,7 +194,7 @@ describe('testConnection.service', () => {
     const result = await testConnection({
       protocol: 'oidc',
       auth_method: 'client_secret_post',
-      tenant_id: 'tenant-2',
+      tenant_id: '22222222-2222-2222-2222-222222222222',
       client_id: 'client-2',
       client_secret: 'bad-secret',
     });
@@ -283,9 +283,10 @@ describe('testConnection.service', () => {
   test('rejects a SAML SSO URL whose tenant id is not a GUID before any fetch', async () => {
     const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: buildMetadataXml() }));
 
+    // No tenant_id on purpose: the point under test is the sso_url's own
+    // tenant-GUID extraction check, not the tenant_id format gate.
     const result = await testConnection({
       protocol: 'saml',
-      tenant_id: 'tenant-3',
       sso_url: 'https://login.microsoftonline.com/tenant-3/saml2',
     });
 
@@ -342,5 +343,35 @@ describe('testConnection.service', () => {
     });
 
     expect(requested[0]).toContain(`?appid=${appId}`);
+  });
+
+  test('rejects a path-traversal tenant_id before any URL is built (S7044)', async () => {
+    // tenant_id is interpolated into Microsoft URL paths (tokenUrl/discoveryUrl/
+    // authorizeUrl). "common/../x" passes a truthiness check but would steer the
+    // request path anywhere on the allowlisted host — the format gate must stop
+    // it before any network call.
+    const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: '{}' }));
+
+    const result = await testConnection({
+      protocol: 'oidc',
+      auth_method: 'none',
+      tenant_id: 'common/../../evil-endpoint',
+      client_id: 'client-1',
+    });
+
+    expect(result).toEqual({
+      success: false,
+      message: 'tenant_id must be a valid UUID or common/consumers/organizations',
+    });
+    expect(httpsSpy).not.toHaveBeenCalled();
+  });
+
+  test('accepts the documented tenant aliases and GUIDs', async () => {
+    mockRequest(https, () => ({ statusCode: 200, body: '{"issuer":"https://login.microsoftonline.com/x/v2.0"}' }));
+
+    for (const tenant of ['common', 'consumers', 'organizations', '12345678-1234-1234-1234-123456789abc']) {
+      const result = await testConnection({ protocol: 'oidc', auth_method: 'none', tenant_id: tenant, client_id: 'c' });
+      expect(result.success).toBe(true);
+    }
   });
 });
