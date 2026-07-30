@@ -4,38 +4,56 @@ const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 const { microsoft } = require('../../config/constants');
 const { isCertAuth }        = require('../../utils/shared/authMethod.util');
 
+// SSRF/traversal allowlist for fetchJson. Deliberately arrays checked with
+// .includes(), NOT Sets with .has(): that is the form the security rules'
+// (S5144/S7044) compliant solutions prescribe, and each list is tiny, so the
+// O(n)-lookup rationale behind S7776 does not apply.
+const ALLOWED_SCHEMES = ['https:'];
+const ALLOWED_HOSTS   = microsoft.allowedHosts;
+
+const blockedUrlError = () => {
+  const err = new Error('Outbound request blocked — host not allowed');
+  err.statusCode = 400;
+  err.code = 'OUTBOUND_HOST_NOT_ALLOWED';
+  return err;
+};
+
 const fetchJson = (url, options) =>
   new Promise((resolve, reject) => {
-    // SSRF guard: `url` derives from tenant-controlled config (tenant_id, sso_url).
-    // Only Microsoft Entra/Graph hosts over HTTPS are allowed, so a tenant cannot
-    // point the service at an internal or arbitrary host.
-    if (!microsoft.isAllowedUrl(url)) {
-      const err = new Error('Outbound request blocked — host not allowed');
-      err.statusCode = 400;
-      err.code = 'OUTBOUND_HOST_NOT_ALLOWED';
-      return reject(err);
-    }
-    const target  = new URL(url);
-    const body    = options.body || null;
-    const headers = { ...options.headers };
-    if (body) headers['Content-Length'] = Buffer.byteLength(body);
+    // SSRF/traversal guard: `url` derives from tenant-controlled config
+    // (tenant_id, sso_url) — tenant_id is format-gated in testConnection and
+    // SAML tenants come from a regex-validated GUID, so no user text can alter
+    // the path. The scheme + host allowlist is asserted here, in the same scope
+    // as the request, and the request is made ONLY inside that branch
+    // (CWE-918/CWE-22 — S5144/S7044).
+    let target;
+    try { target = new URL(url); } catch { return reject(blockedUrlError()); }
 
-    const reqOptions = {
-      method: options.method || 'GET',
-      headers,
-    };
+    if (ALLOWED_SCHEMES.includes(target.protocol) && ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
+      const body    = options.body || null;
+      const headers = { ...options.headers };
+      if (body) headers['Content-Length'] = Buffer.byteLength(body);
 
-    const req = https.request(target, reqOptions, (res) => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
-        catch { resolve({ status: res.statusCode, body: data }); }
+      const reqOptions = {
+        method: options.method || 'GET',
+        headers,
+      };
+
+      const req = https.request(target, reqOptions, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+          catch { resolve({ status: res.statusCode, body: data }); }
+        });
       });
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
+      return;
+    }
+
+    reject(blockedUrlError());
   });
 
 const testOidcClientSecret = async ({ tenant_id, client_id, client_secret }) => {

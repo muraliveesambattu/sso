@@ -12,14 +12,9 @@ jest.mock('../src/config/constants', () => ({
     samlMetadataUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/federationmetadata/2007-06/federationmetadata.xml`,
     authorizeUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`,
     graphScope: 'https://graph.microsoft.com/.default',
-    // SSRF guard (mirrors the real config) — fetchJson calls this before every request.
-    isAllowedUrl: (rawUrl) => {
-      try {
-        const u = new URL(rawUrl);
-        return u.protocol === 'https:'
-          && ['login.microsoftonline.com', 'graph.microsoft.com', 'sts.windows.net'].includes(u.hostname);
-      } catch { return false; }
-    },
+    // SSRF allowlist (mirrors the real config) — fetchJson checks scheme + host
+    // against this before every request.
+    allowedHosts: ['login.microsoftonline.com', 'graph.microsoft.com', 'sts.windows.net'],
   },
 }));
 
