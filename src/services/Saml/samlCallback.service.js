@@ -5,7 +5,7 @@ const { verifyXmlSignature }   = require('../../utils/saml/samlSignature.util');
 const { samlRequestStore }     = require('./samlAuthRequest.service');
 const { resolveUser }          = require('../SSO/userResolution.service');
 const { resolvePermissions }   = require('../SSO/permissionResolver.service');
-const { generateCustomToken }  = require('../../utils/firebase/firebaseAdmin.util');
+const { generateCustomToken, getTenantFriendlyId } = require('../../utils/firebase/firebaseAdmin.util');
 const {
   validateStatus,
   validateIssuer,
@@ -108,11 +108,11 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   let xml;
   try {
     xml = Buffer.from(samlResponse, 'base64').toString('utf-8');
-  } catch (decodeErr) {
+  } catch (error) {
     const err = new Error('Invalid SAMLResponse encoding');
     err.statusCode = 400;
     err.code = 'INVALID_ENCODING';
-    err.cause = decodeErr;
+    err.cause = error;
     throw err;
   }
 
@@ -262,12 +262,16 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   // Resolve permissions (RMS when configured, else Firestore roleConfig)
   const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
 
+  // Mirror the native login's "Company ID" alias for SSO parity.
+  const friendlyId = await getTenantFriendlyId(samlConfig.company_id);
+
   const customToken = await generateCustomToken(zdnaTenantId, {
     email:       email,
     role:        resolution.roles[0]?.role_name || 'user',
     roles:       resolution.roles,
     permissions: resolvedPerms.permissions,
     companyId:   samlConfig.company_id,
+    friendlyId,
     displayName: allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
                  || allAttributes.name
                  || allAttributes.displayname

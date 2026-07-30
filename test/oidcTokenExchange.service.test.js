@@ -36,6 +36,7 @@ jest.mock('../src/services/SSO/permissionResolver.service', () => ({
 
 jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
   generateCustomToken: jest.fn(),
+  getTenantFriendlyId: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../src/config/constants', () => ({
@@ -162,6 +163,7 @@ describe('oidcTokenExchange.service', () => {
       roles: [{ role_name: 'Admin' }],
       permissions: [],
       companyId: 'company-1',
+      friendlyId: null,     // mocked getTenantFriendlyId resolves null
       displayName: 'User One',
     });
     expect(tokens.access_token).toBeNull();

@@ -23,6 +23,7 @@ jest.mock('../src/services/SSO/userResolution.service', () => ({
 
 jest.mock('../src/utils/firebase/firebaseAdmin.util', () => ({
   generateCustomToken: jest.fn(),
+  getTenantFriendlyId: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../src/utils/saml/samlValidator.util', () => ({
@@ -222,6 +223,7 @@ describe('samlCallback.service', () => {
       roles: [{ role_name: 'Admin' }],
       permissions: [],
       companyId: 'company-1',
+      friendlyId: null,     // mocked getTenantFriendlyId resolves null
       displayName: 'Test User',
     });
     expect(samlRequestStore.delete).toHaveBeenCalledWith('req-123');

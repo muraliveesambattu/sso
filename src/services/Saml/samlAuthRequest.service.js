@@ -16,8 +16,8 @@ let spPrivateKey = null;
 try {
   spPrivateKey = fs.readFileSync(SP_PRIVATE_KEY_PATH, 'utf8');
   logger.debug('[SAML] SP private key loaded from file — AuthnRequest signing enabled');
-} catch (keyReadErr) {
-  logger.debug('[SAML] SP private key file not found — falling back to env var', { error: keyReadErr.message });
+} catch (error) {
+  logger.debug('[SAML] SP private key file not found — falling back to env var', { error: error.message });
   if (process.env.SP_PRIVATE_KEY_B64) {
     spPrivateKey = Buffer.from(process.env.SP_PRIVATE_KEY_B64, 'base64').toString('utf8');
     logger.debug('[SAML] SP private key loaded from SP_PRIVATE_KEY_B64 env var — AuthnRequest signing enabled');

@@ -36,7 +36,6 @@ const getFlagFromFirestore = async (companyId, flagName) => {
     return null;
   }
 };
-
 // ── DB read ───────────────────────────────────────────────────────────────────
 const getFlagFromDb = async (companyId, flagName) => {
   try {

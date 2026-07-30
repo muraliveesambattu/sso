@@ -65,11 +65,11 @@ const verifyXmlSignature = (xml, certificate) => {
   let isValid;
   try {
     isValid = signedXml.checkSignature(xml);
-  } catch (sigErr) {
-    const err = new Error(`XML signature verification failed: ${sigErr.message}`);
+  } catch (error) {
+    const err = new Error(`XML signature verification failed: ${error.message}`);
     err.statusCode = 400;
     err.code = 'SIGNATURE_VERIFICATION_ERROR';
-    err.cause = sigErr;
+    err.cause = error;
     throw err;
   }
 
