@@ -8,13 +8,15 @@
  *   JIT OFF → verify user is pre-provisioned; allow or deny with 403
  *
  * Both modes deny the login with 403 NO_ROLE_ASSIGNED when the user ends up
- * with no role — an unmatched JIT user (and no 'default' mapping) or a
- * pre-provisioned user with an empty roles array.
+ * with no role — an unmatched JIT user (and no 'default' mapping), or a
+ * pre-provisioned user whose record carries no roleId.
  */
 
 const crypto = require('node:crypto');
-const { logger }    = require('../../config/logger');
+const { logger } = require('../../config/logger');
 const { isEnabled } = require('../featureFlag.service');
+const admin = require('firebase-admin');
+
 const {
   getSsoIntegrationByCompanyId,
   getJitMappings,
@@ -49,8 +51,8 @@ const extractIdentity = (claims, protocol) => {
       // them to the SAML claim configuration (user.department / user.jobtitle
       // / app roles). Absent attributes simply never match a mapping.
       department: a.department || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department'] || null,
-      jobTitle:   a.jobtitle || a.jobTitle || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
-      appRoles:   toGroupArray(a.role || a.roles),
+      jobTitle: a.jobtitle || a.jobTitle || a['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle'] || null,
+      appRoles: toGroupArray(a.role || a.roles),
       // Full attribute bag — lets JIT mappings match on ANY Entra claim name,
       // not just the 4 named ones above (see matchesMapping's default case).
       raw: a,
@@ -65,8 +67,8 @@ const extractIdentity = (claims, protocol) => {
     displayName: claims.name || claims.preferred_username || null,
     groups: Array.isArray(claims.groups) ? claims.groups : [],
     department: claims.department || null,
-    jobTitle:   claims.jobTitle || claims.jobtitle || null,
-    appRoles:   Array.isArray(claims.roles) ? claims.roles : [],
+    jobTitle: claims.jobTitle || claims.jobtitle || null,
+    appRoles: Array.isArray(claims.roles) ? claims.roles : [],
     // Full claims bag (id_token + any Graph enrichment already merged in by
     // the caller) — lets JIT mappings match on ANY claim name, not just the
     // 4 named ones above.
@@ -114,7 +116,7 @@ const matchesMapping = (mapping, identity) => {
       // Claim keys as Entra actually sends them are case-sensitive (e.g.
       // 'employeeType'), but mapping_source is normalised to lowercase at
       // save time — so the lookup itself must be case-insensitive.
-      const rawKeys   = identity.raw ? Object.keys(identity.raw) : [];
+      const rawKeys = identity.raw ? Object.keys(identity.raw) : [];
       const matchedKey = rawKeys.find(k => norm(k) === norm(mapping.mapping_source));
       const raw = matchedKey === undefined ? undefined : identity.raw[matchedKey];
       if (raw === undefined || raw === null) {
@@ -134,7 +136,7 @@ const matchesMapping = (mapping, identity) => {
 
 const resolveRoles = async (companyId, identity) => {
   const mappings = await getJitMappings(companyId);
-  const sorted   = mappings.sort((a, b) => a.priority - b.priority);
+  const sorted = mappings.sort((a, b) => a.priority - b.priority);
 
   const assignedRoleIds = new Set();
 
@@ -159,10 +161,30 @@ const resolveRoles = async (companyId, identity) => {
   // permissions array here.
   const nameById = new Map(sorted.map(m => [m.role_id, m.role_name]));
   return roleIds.map(id => ({
-    role_id:     id,
-    role_name:   nameById.get(id) || id,
+    role_id: id,
+    role_name: nameById.get(id) || id,
     permissions: [],
   }));
+};
+
+// ── Role Denial ───────────────────────────────────────────────────────────────
+
+// Shared denial for both modes — a login that resolves to no role would sign
+// the user in with no permissions, so refuse it instead. The email/oid are
+// logged so support can tell WHO was blocked without reproducing the login.
+const denyNoRole = (companyId, protocol, identity, reason) => {
+  logger.warn('Login denied — no role resolved for this user', {
+    action: 'login_denied_no_role',
+    company_id: companyId,
+    protocol,
+    email: identity.email,
+    oid: identity.oid,
+    reason,
+  });
+  const err = new Error('No role assigned to this user');
+  err.statusCode = 403;
+  err.code = 'NO_ROLE_ASSIGNED';
+  throw err;
 };
 
 // User store helpers delegate to the PostgreSQL data layer (postgresSSO.service.js)
@@ -191,7 +213,7 @@ const resolveUser = async (companyId, claims, protocol) => {
   // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
   // Flag takes priority over the sso_integrations.jit_status column.
   // This lets admins disable JIT without changing the SSO config record.
-  const jitFlag    = await isEnabled(companyId, 'jit_enabled');
+  const jitFlag = await isEnabled(companyId, 'jit_enabled');
   const jitEnabled = integration.jit_status === true && jitFlag;
 
   if (integration.jit_status && !jitFlag) {
@@ -214,19 +236,11 @@ const resolveUser = async (companyId, claims, protocol) => {
   if (jitEnabled) {
     const roles = await resolveRoles(companyId, identity);
 
-    // No mapping matched and no 'default' mapping exists — the user has no role
-    // in this company, so deny the login rather than provisioning a role-less
-    // account that would sign in with no permissions. Checked BEFORE any
-    // create/update so a denied attempt leaves no orphan row and does not wipe
-    // an existing user's stored roles.
+    // No mapping matched and no 'default' mapping exists. Checked BEFORE any
+    // create/update so a denied attempt leaves no orphan user row behind and
+    // does not wipe an existing user's stored roles.
     if (roles.length === 0) {
-      logger.warn('Login denied — no JIT mapping matched this user', {
-        action: 'login_denied_no_role', company_id: companyId, protocol,
-      });
-      const err = new Error('No role matched for this user');
-      err.statusCode = 403;
-      err.code = 'NO_ROLE_ASSIGNED';
-      throw err;
+      denyNoRole(companyId, protocol, identity, 'no_jit_mapping_matched');
     }
 
     let user = await findUserByOid(companyId, identity.oid);
@@ -235,24 +249,24 @@ const resolveUser = async (companyId, claims, protocol) => {
     if (user) {
       // Re-login — sync roles + update last_login
       await updateUser(user.user_id || user.id, {
-        roles:        roles.map(r => r.role_id),
+        roles: roles.map(r => r.role_id),
         display_name: identity.displayName || user.display_name,
-        last_login:   new Date().toISOString(),
+        last_login: new Date().toISOString(),
       });
       action = 'updated';
       logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
     } else {
       // First login — create user
       user = await createUser({
-        user_id:         crypto.randomUUID(),
-        company_id:      companyId,
-        email:           identity.email,
-        oid:             identity.oid,
-        display_name:    identity.displayName,
-        roles:           roles.map(r => r.role_id),
-        login_method:    'sso',   // records that this user authenticates via SSO
+        user_id: crypto.randomUUID(),
+        company_id: companyId,
+        email: identity.email,
+        oid: identity.oid,
+        display_name: identity.displayName,
+        roles: roles.map(r => r.role_id),
+        login_method: 'sso',   // records that this user authenticates via SSO
         jit_provisioned: true,
-        last_login:      new Date().toISOString(),
+        last_login: new Date().toISOString(),
       });
       action = 'created';
       logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
@@ -262,57 +276,84 @@ const resolveUser = async (companyId, claims, protocol) => {
   }
 
   // ── JIT DISABLED (non-JIT) ─────────────────────────────────────────────────
-  // Step A: Find user by OID first (most reliable), then fall back to email
-  let user = await findUserByOid(companyId, identity.oid);
-  if (!user) user = await findUserByEmail(companyId, identity.email);
+  // Step A — Firestore lookup by email under tenant
+  logger.debug('[NON-JIT] Looking up user | companyId:', companyId, '| email:', identity.email);
 
-  // Step B: User not found — not provisioned for this company
+  const snapshot = await admin.firestore()
+    .collection('tenants')
+    .doc(companyId)
+    .collection('users')
+    .where('email', '==', identity.email)
+    .limit(1)
+    .get()
+
+  const user = snapshot.empty ? null : snapshot.docs[0].data()
+
+  // Step B — Not provisioned
   if (!user) {
-    const err = new Error('You Are not allowed to login using SSO');
+    logger.warn('[NON-JIT] User not found in Firestore | email:', identity.email, '| companyId:', companyId);
+    const err = new Error('You are not allowed to login using SSO');
     err.statusCode = 403;
     err.code = 'USER_NOT_PROVISIONED';
     throw err;
   }
 
-  // Step C: Verify user's login method is SSO.
-  // If the user was created via a different auth method (e.g. password),
-  // deny SSO login to prevent auth method bypass.
-  if (user.login_method && user.login_method !== 'sso') {
-    const err = new Error('You Are not allowed to login using SSO');
+  // Step C — Wrong login method
+  if (user.loginMethod !== 'Entra SSO') {
+    logger.warn('[NON-JIT] Login method mismatch | loginMethod:', user.loginMethod);
+    const err = new Error('You are not allowed to login using zDNA SSO');
     err.statusCode = 403;
     err.code = 'LOGIN_METHOD_NOT_ALLOWED';
     throw err;
   }
 
-  // Step D: Build role rows from the user's stored roles — no local role table.
-  // role_name = the stored value; real permissions are resolved downstream from
-  // RMS → Firestore roleConfig (permissionResolver), same as the JIT path.
-  const roles = (user.roles || []).map(r => ({ role_id: r, role_name: r, permissions: [] }));
-
-  // Step E: Deny when the provisioned user carries no roles — signing in with an
-  // empty role set gives an account with no permissions. Checked before the
-  // last_login write so a denied attempt is not recorded as a successful login.
-  if (roles.length === 0) {
-    logger.warn('Login denied — provisioned user has no roles assigned', {
-      action: 'login_denied_no_role', company_id: companyId, protocol,
-    });
-    const err = new Error('No role assigned to this user');
+  // Step D — Expired
+  if (user.status === 'expired') {
+    const err = new Error('Your account has expired. Please contact your administrator');
     err.statusCode = 403;
-    err.code = 'NO_ROLE_ASSIGNED';
+    err.code = 'USER_EXPIRED';
     throw err;
   }
 
-  logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
+  // Step E — Resolve role
+  const roleId = user.roleId || user.role_id;
 
-  // Update last_login — roles unchanged for non-JIT users. Pre-provisioned
-  // users are created with a `pending:` oid placeholder (the real Entra oid
-  // is unknown until first login) — backfill it here so future logins match
-  // by oid instead of falling through to the email lookup.
-  const nonJitUpdates = { last_login: new Date().toISOString() };
-  if (!user.oid || user.oid.startsWith('pending:')) {
-    nonJitUpdates.oid = identity.oid;
+  // Step E.1 — Deny when the provisioned user carries no role. Placed BEFORE
+  // Step F so a denied attempt is not recorded as a successful login and does
+  // not flip an invited user's status to "Joined".
+  if (!roleId) {
+    denyNoRole(companyId, protocol, identity, 'user_has_no_role_id');
   }
-  await updateUser(user.user_id || user.id, nonJitUpdates);
+
+  const roles = [{ role_id: roleId }];
+
+  // Step F — Update lastLoginAt + invited → joined
+  const currentTime = Date.now();
+  const usersSnapshot = await admin.firestore()
+    .collection("tenants")
+    .doc(companyId)
+    .collection("users")
+    .where("UUID", "==", user?.userUUID)
+    .get();
+  if (!usersSnapshot.empty) {
+    const userDoc = usersSnapshot.docs[0];
+    const userData = userDoc.data();
+    if (userData.loginMethod === "Entra SSO") {
+      // Update user document
+      await userDoc.ref.update({
+        status: "Joined",
+        lastLoginTime: currentTime,
+        updatedDateTime: currentTime,
+      });
+      // Update tenant document
+      await admin.firestore().collection("tenants").doc(companyId).update({
+        lastLoginTime: currentTime,
+        updatedDateTime: currentTime,
+      });
+    }
+  }
+
+  logger.debug('[NON-JIT] User login success | email:', identity.email, '| loginMethod:', user.loginMethod, '| roleId:', roleId);
 
   return { user, roles, action: 'login' };
 };
