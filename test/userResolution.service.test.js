@@ -227,6 +227,47 @@ describe('userResolution.service', () => {
     ]);
   });
 
+  test('denies a JIT login when no mapping matches and no default mapping exists', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'group', mapping_value: 'zdna-admins', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
+    ]);
+    findUserByOid.mockResolvedValue(null);
+
+    await expect(resolveUser('company-1', {
+      email: 'norole@example.com',
+      oid: 'oid-norole',
+      groups: ['some-other-group'],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'NO_ROLE_ASSIGNED',
+    });
+
+    // Denied before provisioning — no orphan user row is left behind
+    expect(createUser).not.toHaveBeenCalled();
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  test('denies a JIT re-login when mappings no longer match, without wiping stored roles', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'department', mapping_value: 'IT', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
+    ]);
+    findUserByOid.mockResolvedValue({ user_id: 'user-6', display_name: 'Existing User', roles: ['role-admin'] });
+
+    await expect(resolveUser('company-1', {
+      email: 'existing@example.com',
+      oid: 'oid-6',
+      department: 'Sales',
+      groups: [],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'NO_ROLE_ASSIGNED',
+    });
+
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
   test('updates an existing JIT user on re-login', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([
@@ -322,6 +363,53 @@ describe('userResolution.service', () => {
       roles: [{ role_id: 'role-manager', role_name: 'role-manager', permissions: [] }],
       action: 'login',
     });
+  });
+
+  test('denies a non-JIT login when the provisioned user has no roles', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    findUserByOid.mockResolvedValue({
+      user_id: 'user-7',
+      email: 'noroles@example.com',
+      oid: 'oid-7',
+      login_method: 'sso',
+      roles: [],
+    });
+
+    await expect(resolveUser('company-1', {
+      email: 'noroles@example.com',
+      oid: 'oid-7',
+      groups: [],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'NO_ROLE_ASSIGNED',
+    });
+
+    // Denied attempts are not recorded as a successful login
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  test('denies a non-JIT login when the provisioned user has no roles column value', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    findUserByOid.mockResolvedValue(null);
+    findUserByEmail.mockResolvedValue({
+      user_id: 'user-8',
+      email: 'nullroles@example.com',
+      oid: 'pending:placeholder-uuid',
+      login_method: 'sso',
+      roles: null,
+    });
+
+    await expect(resolveUser('company-1', {
+      email: 'nullroles@example.com',
+      oid: 'real-oid-8',
+      groups: [],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'NO_ROLE_ASSIGNED',
+    });
+
+    // oid backfill must not happen for a denied login either
+    expect(updateUser).not.toHaveBeenCalled();
   });
 
   test('backfills a pending oid placeholder on first non-JIT login', async () => {

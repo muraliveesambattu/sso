@@ -6,6 +6,10 @@
  *
  *   JIT ON  → auto-create user on first login; re-sync roles on every login
  *   JIT OFF → verify user is pre-provisioned; allow or deny with 403
+ *
+ * Both modes deny the login with 403 NO_ROLE_ASSIGNED when the user ends up
+ * with no role — an unmatched JIT user (and no 'default' mapping) or a
+ * pre-provisioned user with an empty roles array.
  */
 
 const crypto = require('node:crypto');
@@ -210,6 +214,21 @@ const resolveUser = async (companyId, claims, protocol) => {
   if (jitEnabled) {
     const roles = await resolveRoles(companyId, identity);
 
+    // No mapping matched and no 'default' mapping exists — the user has no role
+    // in this company, so deny the login rather than provisioning a role-less
+    // account that would sign in with no permissions. Checked BEFORE any
+    // create/update so a denied attempt leaves no orphan row and does not wipe
+    // an existing user's stored roles.
+    if (roles.length === 0) {
+      logger.warn('Login denied — no JIT mapping matched this user', {
+        action: 'login_denied_no_role', company_id: companyId, protocol,
+      });
+      const err = new Error('No role matched for this user');
+      err.statusCode = 403;
+      err.code = 'NO_ROLE_ASSIGNED';
+      throw err;
+    }
+
     let user = await findUserByOid(companyId, identity.oid);
     let action;
 
@@ -269,6 +288,20 @@ const resolveUser = async (companyId, claims, protocol) => {
   // role_name = the stored value; real permissions are resolved downstream from
   // RMS → Firestore roleConfig (permissionResolver), same as the JIT path.
   const roles = (user.roles || []).map(r => ({ role_id: r, role_name: r, permissions: [] }));
+
+  // Step E: Deny when the provisioned user carries no roles — signing in with an
+  // empty role set gives an account with no permissions. Checked before the
+  // last_login write so a denied attempt is not recorded as a successful login.
+  if (roles.length === 0) {
+    logger.warn('Login denied — provisioned user has no roles assigned', {
+      action: 'login_denied_no_role', company_id: companyId, protocol,
+    });
+    const err = new Error('No role assigned to this user');
+    err.statusCode = 403;
+    err.code = 'NO_ROLE_ASSIGNED';
+    throw err;
+  }
+
   logger.debug('[NON-JIT] User login:', identity.email, '| login_method:', user.login_method || 'sso', '| roles:', user.roles);
 
   // Update last_login — roles unchanged for non-JIT users. Pre-provisioned

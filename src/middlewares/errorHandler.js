@@ -29,6 +29,7 @@ const SAFE_MESSAGES = {
   CONFIG_NOT_FOUND:         'SSO configuration not found. Please contact your administrator.',
   USER_NOT_PROVISIONED:     'Your account is not authorised for SSO access. Please contact your administrator.',
   LOGIN_METHOD_NOT_ALLOWED: 'SSO login is not permitted for this account.',
+  NO_ROLE_ASSIGNED:         'No role is assigned to your account for this organisation. Please contact your administrator.',
   MISSING_IDENTITY_CLAIMS:  'Required identity claims are missing. Please contact your administrator.',
   MISSING_EMAIL:            'Your account is missing a required email claim.',
   MISSING_OID:              'Your account is missing a required identifier.',
