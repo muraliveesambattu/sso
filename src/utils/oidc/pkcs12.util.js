@@ -124,25 +124,30 @@ const extractFromPkcs12 = async (base64Pfx, password) => {
     });
   }
 
-  if (!certPem || !certPem.includes('CERTIFICATE')) {
+  // openssl prefixes each PEM block with a "Bag Attributes / localKeyID /
+  // subject= / issuer=" preamble. Scope the base64 to what sits BETWEEN the
+  // BEGIN/END markers — filtering only on '-----' swept those preamble lines
+  // into the DER, so the hash covered the wrong bytes and Entra rejected the
+  // assertion with AADSTS700027 ("certificate ... is not registered").
+  const certMatch = certPem?.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/);
+  if (!certMatch) {
     throw Object.assign(new Error('No certificate found in the bundle'), {
       statusCode: 400, code: 'NO_CERTIFICATE',
     });
   }
 
   // ── SHA-1 thumbprint (pure Node.js crypto) ───────────────────────────────────
-  // Strip PEM headers → base64-decode to DER → SHA-1
   // SHA-1 is REQUIRED here: this is the JWT `x5t` header, which RFC 7515
   // defines as the SHA-1 certificate thumbprint (identifier, not integrity).
-  const certBase64 = certPem
-    .split('\n')
-    .filter(line => !line.startsWith('-----') && line.trim())
-    .join('');
-  const certDer       = Buffer.from(certBase64, 'base64');
+  const certDer       = Buffer.from(certMatch[1].replace(/\s+/g, ''), 'base64');
   const thumbprintHex = crypto.createHash('sha1').update(certDer).digest('hex').toUpperCase();
 
+  // Same preamble applies to the key block — store a clean PEM rather than one
+  // that only parses because crypto.createPrivateKey scans for the marker.
+  const keyMatch = keyPem?.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/);
+
   return {
-    privateKeyB64: Buffer.from(keyPem, 'utf8').toString('base64'),
+    privateKeyB64: Buffer.from(keyMatch ? keyMatch[0] : keyPem, 'utf8').toString('base64'),
     thumbprintHex,
   };
 };
