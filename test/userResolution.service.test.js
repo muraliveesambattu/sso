@@ -15,7 +15,13 @@ jest.mock('../src/services/db/ssoDataService', () => ({
   updateUser: jest.fn(),
 }));
 
+// The non-JIT path reads and writes Firestore directly (the JIT path still uses
+// the Postgres data service above), so firebase-admin is mocked rather than
+// initialised.
+jest.mock('firebase-admin', () => ({ firestore: jest.fn() }));
+
 const crypto = require('node:crypto');
+const admin = require('firebase-admin');
 const { resolveUser } = require('../src/services/SSO/userResolution.service');
 const { logger } = require('../src/config/logger');
 const { isEnabled } = require('../src/services/featureFlag.service');
@@ -27,6 +33,53 @@ const {
   createUser,
   updateUser,
 } = require('../src/services/db/ssoDataService');
+
+// ── Firestore mock ────────────────────────────────────────────────────────────
+// resolveUser's non-JIT path walks two chains off admin.firestore():
+//   collection('tenants').doc(id).collection('users').where('email').limit(1).get()
+//   collection('tenants').doc(id).collection('users').where('UUID').get()
+// plus collection('tenants').doc(id).update() for the tenant timestamp. The
+// helper below returns that shape and exposes the write spies so a test can
+// assert whether the "Joined" transition actually ran.
+const firestoreDouble = ({ userDoc = null, uuidDoc = undefined } = {}) => {
+  const userRefUpdate = jest.fn().mockResolvedValue(undefined);
+  const tenantUpdate  = jest.fn().mockResolvedValue(undefined);
+
+  // Step F re-queries by UUID; default to returning the same doc Step A found.
+  const stepFDoc = uuidDoc === undefined ? userDoc : uuidDoc;
+
+  const snapshotFor = (doc) => ({
+    empty: !doc,
+    docs: doc ? [{ data: () => doc, ref: { update: userRefUpdate } }] : [],
+  });
+
+  const usersCollection = {
+    where: jest.fn((field) => (field === 'email'
+      ? { limit: jest.fn(() => ({ get: jest.fn().mockResolvedValue(snapshotFor(userDoc)) })) }
+      : { get: jest.fn().mockResolvedValue(snapshotFor(stepFDoc)) })),
+  };
+
+  const db = {
+    collection: jest.fn(() => ({
+      doc: jest.fn(() => ({
+        collection: jest.fn(() => usersCollection),
+        update: tenantUpdate,
+      })),
+    })),
+  };
+
+  admin.firestore.mockReturnValue(db);
+  return { userRefUpdate, tenantUpdate };
+};
+
+const ssoUser = (over = {}) => ({
+  email: 'user@example.com',
+  loginMethod: 'Entra SSO',
+  roleId: 'Admin',
+  userUUID: 'uuid-user-1',
+  status: 'Joined',
+  ...over,
+});
 
 describe('userResolution.service', () => {
   let randomUuidSpy;
@@ -294,16 +347,12 @@ describe('userResolution.service', () => {
     expect(result.action).toBe('updated');
   });
 
-  test('falls back to non-JIT mode when the jit_enabled flag is turned off', async () => {
+  test('falls back to non-JIT mode when the jit_enabled feature flag is turned off', async () => {
+    // jit_status is true on the record, but the kill-switch flag wins — so the
+    // Firestore (non-JIT) path runs and rejects the password-based account.
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     isEnabled.mockResolvedValue(false);
-    findUserByOid.mockResolvedValue(null);
-    findUserByEmail.mockResolvedValue({
-      user_id: 'user-3',
-      email: 'user@example.com',
-      login_method: 'password',
-      roles: ['role-temporary'],
-    });
+    firestoreDouble({ userDoc: ssoUser({ loginMethod: 'password' }) });
 
     await expect(resolveUser('company-1', {
       email: 'user@example.com',
@@ -314,12 +363,13 @@ describe('userResolution.service', () => {
       statusCode: 403,
       code: 'LOGIN_METHOD_NOT_ALLOWED',
     });
+
+    expect(getJitMappings).not.toHaveBeenCalled();
   });
 
-  test('rejects non-JIT logins for users who are not provisioned by oid or email', async () => {
+  test('rejects a non-JIT login when Firestore has no user for that email', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-2', jit_status: false });
-    findUserByOid.mockResolvedValue(null);
-    findUserByEmail.mockResolvedValue(null);
+    firestoreDouble({ userDoc: null });
 
     await expect(resolveUser('company-2', {
       email: 'missing@example.com',
@@ -332,14 +382,27 @@ describe('userResolution.service', () => {
     });
   });
 
-  test('allows non-JIT logins for pre-provisioned SSO users and updates last_login', async () => {
+  test('rejects a non-JIT login for an expired account', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
-    findUserByOid.mockResolvedValue({
-      user_id: 'user-4',
+    firestoreDouble({ userDoc: ssoUser({ status: 'expired' }) });
+
+    await expect(resolveUser('company-1', {
       email: 'user@example.com',
-      oid: 'oid-4',
-      login_method: 'sso',
-      roles: ['role-manager'],
+      oid: 'oid-exp',
+      groups: [],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'USER_EXPIRED',
+    });
+  });
+
+  test('allows a non-JIT login, flips the user to Joined, and stamps both documents', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const user = ssoUser({ roleId: 'Manager', status: 'invited' });
+    const { userRefUpdate, tenantUpdate } = firestoreDouble({
+      userDoc: user,
+      // Step F re-reads by UUID; the stored doc still says Entra SSO
+      uuidDoc: { ...user, status: 'invited' },
     });
 
     const result = await resolveUser('company-1', {
@@ -349,91 +412,83 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(updateUser).toHaveBeenCalledWith('user-4', { last_login: expect.any(String) });
-    expect(result).toEqual({
-      user: {
-        user_id: 'user-4',
-        email: 'user@example.com',
-        oid: 'oid-4',
-        login_method: 'sso',
-        roles: ['role-manager'],
-      },
-      // Non-JIT roles are built from the user's stored role values (name = the
-      // stored value); permissions come from RMS/Firestore downstream.
-      roles: [{ role_id: 'role-manager', role_name: 'role-manager', permissions: [] }],
-      action: 'login',
+    expect(result).toEqual({ user, roles: [{ role_id: 'Manager' }], action: 'login' });
+
+    expect(userRefUpdate).toHaveBeenCalledWith({
+      status: 'Joined',
+      lastLoginTime: expect.any(Number),
+      updatedDateTime: expect.any(Number),
+    });
+    expect(tenantUpdate).toHaveBeenCalledWith({
+      lastLoginTime: expect.any(Number),
+      updatedDateTime: expect.any(Number),
     });
   });
 
-  test('denies a non-JIT login when the provisioned user has no roles', async () => {
+  test('accepts role_id as an alias for roleId', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
-    findUserByOid.mockResolvedValue({
-      user_id: 'user-7',
-      email: 'noroles@example.com',
-      oid: 'oid-7',
-      login_method: 'sso',
-      roles: [],
-    });
+    firestoreDouble({ userDoc: ssoUser({ roleId: undefined, role_id: 'Field Technician' }) });
 
-    await expect(resolveUser('company-1', {
-      email: 'noroles@example.com',
-      oid: 'oid-7',
-      groups: [],
-    }, 'oidc')).rejects.toMatchObject({
-      statusCode: 403,
-      code: 'NO_ROLE_ASSIGNED',
-    });
-
-    // Denied attempts are not recorded as a successful login
-    expect(updateUser).not.toHaveBeenCalled();
-  });
-
-  test('denies a non-JIT login when the provisioned user has no roles column value', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
-    findUserByOid.mockResolvedValue(null);
-    findUserByEmail.mockResolvedValue({
-      user_id: 'user-8',
-      email: 'nullroles@example.com',
-      oid: 'pending:placeholder-uuid',
-      login_method: 'sso',
-      roles: null,
-    });
-
-    await expect(resolveUser('company-1', {
-      email: 'nullroles@example.com',
-      oid: 'real-oid-8',
-      groups: [],
-    }, 'oidc')).rejects.toMatchObject({
-      statusCode: 403,
-      code: 'NO_ROLE_ASSIGNED',
-    });
-
-    // oid backfill must not happen for a denied login either
-    expect(updateUser).not.toHaveBeenCalled();
-  });
-
-  test('backfills a pending oid placeholder on first non-JIT login', async () => {
-    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
-    // Pre-provisioned via POST /sso/users — real Entra oid unknown at creation
-    findUserByOid.mockResolvedValue(null);
-    findUserByEmail.mockResolvedValue({
-      user_id: 'user-5',
-      email: 'user5@example.com',
-      oid: 'pending:placeholder-uuid',
-      login_method: 'sso',
-      roles: ['role-temporary'],
-    });
-
-    await resolveUser('company-1', {
-      email: 'user5@example.com',
-      oid: 'real-oid-5',
+    const { roles } = await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-alias',
       groups: [],
     }, 'oidc');
 
-    expect(updateUser).toHaveBeenCalledWith('user-5', {
-      last_login: expect.any(String),
-      oid: 'real-oid-5',
+    expect(roles).toEqual([{ role_id: 'Field Technician' }]);
+  });
+
+  test('denies a non-JIT login when the provisioned user carries no role', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const { userRefUpdate, tenantUpdate } = firestoreDouble({
+      userDoc: ssoUser({ roleId: undefined, role_id: undefined }),
     });
+
+    await expect(resolveUser('company-1', {
+      email: 'noroles@example.com',
+      oid: 'oid-7',
+      groups: [],
+    }, 'oidc')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'NO_ROLE_ASSIGNED',
+    });
+
+    // Denied before Step F — no "Joined" transition, no lastLoginTime stamp
+    expect(userRefUpdate).not.toHaveBeenCalled();
+    expect(tenantUpdate).not.toHaveBeenCalled();
+  });
+
+  test('skips the Joined transition when the stored doc is not an SSO account', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const { userRefUpdate, tenantUpdate } = firestoreDouble({
+      userDoc: ssoUser(),
+      // Step A saw an SSO account, but the UUID re-query returns a different one
+      uuidDoc: { loginMethod: 'password' },
+    });
+
+    const result = await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-9',
+      groups: [],
+    }, 'oidc');
+
+    expect(result.action).toBe('login');
+    expect(userRefUpdate).not.toHaveBeenCalled();
+    expect(tenantUpdate).not.toHaveBeenCalled();
+  });
+
+  test('tolerates a UUID re-query that returns nothing', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const { userRefUpdate } = firestoreDouble({ userDoc: ssoUser(), uuidDoc: null });
+
+    const result = await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-10',
+      groups: [],
+    }, 'oidc');
+
+    expect(result.action).toBe('login');
+    expect(userRefUpdate).not.toHaveBeenCalled();
   });
 
   test('falls back to preferred_username as display name when name is absent during JIT updates', async () => {

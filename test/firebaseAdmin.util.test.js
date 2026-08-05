@@ -3,6 +3,8 @@ const loadFirebaseUtil = ({
   adminApps = [],
   createCustomTokenImpl,
   tenantDoc,            // controls what a Firestore doc .get() resolves to
+  roleConfigSnap,       // controls what the roleConfig where().limit().get() resolves to
+  verifyIdTokenImpl,
 } = {}) => {
   jest.resetModules();
 
@@ -15,7 +17,8 @@ const loadFirebaseUtil = ({
   Object.assign(process.env, env);
 
   const createCustomToken = jest.fn(createCustomTokenImpl || (async () => 'firebase-token'));
-  const auth = jest.fn(() => ({ createCustomToken }));
+  const verifyIdToken = jest.fn(verifyIdTokenImpl || (async () => ({ uid: 'uid-1', email: 'user@example.com' })));
+  const auth = jest.fn(() => ({ createCustomToken, verifyIdToken }));
   const cert = jest.fn((config) => ({ kind: 'cert', config }));
   const initializeApp = jest.fn();
 
@@ -28,6 +31,12 @@ const loadFirebaseUtil = ({
     doc: jest.fn((d) => { firestorePath.push(['doc', d]); return chain; }),
     set: permissionSet,
     get: tenantGet,
+    // getRolePermissionStrings ends in .where('roleName','==',x).limit(1).get()
+    where: jest.fn(() => ({
+      limit: jest.fn(() => ({
+        get: jest.fn(async () => roleConfigSnap || { empty: true, docs: [] }),
+      })),
+    })),
   };
   const firestore = jest.fn(() => chain);
 
@@ -42,8 +51,15 @@ const loadFirebaseUtil = ({
     credential: { cert },
   }));
 
-  const { generateCustomToken, transformRolePermissions, getTenantFriendlyId } = require('../src/utils/firebase/firebaseAdmin.util');
-  return { generateCustomToken, transformRolePermissions, getTenantFriendlyId, adminMock: { auth, createCustomToken, cert, initializeApp, firestore, permissionSet, tenantGet, firestorePath } };
+  const {
+    generateCustomToken, transformRolePermissions, getTenantFriendlyId,
+    getRolePermissionStrings, verifyIdToken: verifyIdTokenUnderTest,
+  } = require('../src/utils/firebase/firebaseAdmin.util');
+  return {
+    generateCustomToken, transformRolePermissions, getTenantFriendlyId,
+    getRolePermissionStrings, verifyIdToken: verifyIdTokenUnderTest,
+    adminMock: { auth, createCustomToken, verifyIdToken, cert, initializeApp, firestore, permissionSet, tenantGet, firestorePath },
+  };
 };
 
 describe('firebaseAdmin.util', () => {
@@ -310,6 +326,93 @@ describe('firebaseAdmin.util', () => {
 
     expect(adminMock.initializeApp).toHaveBeenCalledWith();
     expect(adminMock.createCustomToken).toHaveBeenCalled();
+  });
+
+  // ── getRolePermissionStrings ────────────────────────────────────────────────
+  // Reads tenants/{id}/tenantConfig/roleConfig/roleConfig where roleName == x.
+  // Every failure mode returns [] rather than throwing — a permissions lookup
+  // must never break a login.
+  const CONFIGURED_ENV = {
+    FIREBASE_PROJECT_ID: 'proj', FIREBASE_CLIENT_EMAIL: 'sa@proj.iam', FIREBASE_PRIVATE_KEY: 'key',
+  };
+
+  test('getRolePermissionStrings derives permission strings from the roleConfig doc', async () => {
+    const { getRolePermissionStrings } = loadFirebaseUtil({
+      env: CONFIGURED_ENV,
+      roleConfigSnap: {
+        empty: false,
+        docs: [{ data: () => ({ permissions: { deviceManagement: { view: true, edit: true } } }) }],
+      },
+    });
+
+    const perms = await getRolePermissionStrings('company-1', 'Manager');
+    expect(Array.isArray(perms)).toBe(true);
+    expect(perms.length).toBeGreaterThan(0);
+  });
+
+  test('getRolePermissionStrings returns [] when no roleConfig doc matches the role', async () => {
+    const { getRolePermissionStrings } = loadFirebaseUtil({
+      env: CONFIGURED_ENV,
+      roleConfigSnap: { empty: true, docs: [] },
+    });
+
+    await expect(getRolePermissionStrings('company-1', 'Nonexistent')).resolves.toEqual([]);
+  });
+
+  test('getRolePermissionStrings returns [] without touching Firestore when args are missing', async () => {
+    const { getRolePermissionStrings, adminMock } = loadFirebaseUtil({ env: CONFIGURED_ENV });
+
+    await expect(getRolePermissionStrings(null, 'Manager')).resolves.toEqual([]);
+    await expect(getRolePermissionStrings('company-1', null)).resolves.toEqual([]);
+    expect(adminMock.firestore).not.toHaveBeenCalled();
+  });
+
+  test('getRolePermissionStrings returns [] in dev mode (Firebase not configured)', async () => {
+    const { getRolePermissionStrings, adminMock } = loadFirebaseUtil();
+
+    await expect(getRolePermissionStrings('company-1', 'Manager')).resolves.toEqual([]);
+    expect(adminMock.firestore).not.toHaveBeenCalled();
+  });
+
+  test('getRolePermissionStrings swallows a Firestore failure — a read must not break login', async () => {
+    const { getRolePermissionStrings } = loadFirebaseUtil({
+      env: CONFIGURED_ENV,
+      roleConfigSnap: null,
+    });
+    // Force the query itself to reject
+    const admin = require('firebase-admin');
+    admin.firestore.mockImplementationOnce(() => { throw new Error('permission denied'); });
+
+    await expect(getRolePermissionStrings('company-1', 'Manager')).resolves.toEqual([]);
+  });
+
+  // ── verifyIdToken ───────────────────────────────────────────────────────────
+  test('verifyIdToken delegates to the Admin SDK and returns the decoded claims', async () => {
+    const { verifyIdToken, adminMock } = loadFirebaseUtil({
+      env: CONFIGURED_ENV,
+      verifyIdTokenImpl: async () => ({ uid: 'uid-9', email: 'a@b.com', companyId: 'c1' }),
+    });
+
+    await expect(verifyIdToken('id-token')).resolves.toMatchObject({ uid: 'uid-9', companyId: 'c1' });
+    expect(adminMock.verifyIdToken).toHaveBeenCalledWith('id-token');
+  });
+
+  test('verifyIdToken throws 503 AUTH_NOT_CONFIGURED when the SDK has no credentials', async () => {
+    const { verifyIdToken, adminMock } = loadFirebaseUtil(); // dev mode, nothing configured
+
+    await expect(verifyIdToken('id-token')).rejects.toMatchObject({
+      statusCode: 503, code: 'AUTH_NOT_CONFIGURED',
+    });
+    expect(adminMock.auth).not.toHaveBeenCalled();
+  });
+
+  test('verifyIdToken propagates an invalid-token rejection from the SDK', async () => {
+    const { verifyIdToken } = loadFirebaseUtil({
+      env: CONFIGURED_ENV,
+      verifyIdTokenImpl: async () => { throw new Error('Firebase ID token has expired'); },
+    });
+
+    await expect(verifyIdToken('stale')).rejects.toThrow('Firebase ID token has expired');
   });
 
   test('wraps Firebase SDK failures with a service-specific error code', async () => {

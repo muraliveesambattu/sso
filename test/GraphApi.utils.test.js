@@ -1,12 +1,13 @@
 jest.mock('../src/config/constants', () => ({
   microsoft: {
     graphMemberOf: 'https://graph.microsoft.com/v1.0/me/memberOf?$select=id,securityEnabled',
+    graphMe:       'https://graph.microsoft.com/v1.0/me?$select=department,jobTitle',
   },
 }));
 
 const { EventEmitter } = require('node:events');
 const https = require('node:https');
-const { fetchUserGroupsFromGraph } = require('../src/utils/oidc/GraphApi.utils');
+const { fetchUserGroupsFromGraph, fetchUserProfileFromGraph } = require('../src/utils/oidc/GraphApi.utils');
 
 describe('GraphApi.utils', () => {
   let requestSpy;
@@ -94,5 +95,61 @@ describe('GraphApi.utils', () => {
     queueResponses({ timeout: true });
 
     await expect(fetchUserGroupsFromGraph('access-token-3')).rejects.toThrow('Graph API request timed out');
+  });
+
+  // ── fetchUserProfileFromGraph ───────────────────────────────────────────────
+  // Feeds the department/jobtitle JIT mapping sources. Uses fetchGraphObject
+  // (single object) rather than fetchGraphPage, so it needs its own coverage.
+  describe('fetchUserProfileFromGraph', () => {
+    test('returns department and jobTitle from /me', async () => {
+      queueResponses({
+        statusCode: 200,
+        body: JSON.stringify({ department: 'IT', jobTitle: 'Engineer', displayName: 'ignored' }),
+      });
+
+      await expect(fetchUserProfileFromGraph('token')).resolves.toEqual({
+        department: 'IT', jobTitle: 'Engineer',
+      });
+    });
+
+    test('normalises absent attributes to null rather than undefined', async () => {
+      queueResponses({ statusCode: 200, body: JSON.stringify({ displayName: 'No Dept' }) });
+
+      await expect(fetchUserProfileFromGraph('token')).resolves.toEqual({
+        department: null, jobTitle: null,
+      });
+    });
+
+    test('sends the bearer token and targets the /me endpoint', async () => {
+      queueResponses({ statusCode: 200, body: JSON.stringify({}) });
+      await fetchUserProfileFromGraph('profile-token');
+
+      const [options] = requestSpy.mock.calls[0];
+      expect(options.headers.Authorization).toBe('Bearer profile-token');
+      expect(options.hostname).toBe('graph.microsoft.com');
+      expect(options.path).toContain('/v1.0/me');
+      expect(options.method).toBe('GET');
+      expect(options.rejectUnauthorized).toBe(true);
+    });
+
+    test('rejects on a non-200 status', async () => {
+      queueResponses({ statusCode: 403, body: '{"error":"Forbidden"}' });
+      await expect(fetchUserProfileFromGraph('token')).rejects.toThrow('Graph API failed: HTTP 403');
+    });
+
+    test('rejects when the body is not valid JSON', async () => {
+      queueResponses({ statusCode: 200, body: '<html>gateway error</html>' });
+      await expect(fetchUserProfileFromGraph('token')).rejects.toThrow('Failed to parse Graph API response');
+    });
+
+    test('rejects on a transport error', async () => {
+      queueResponses({ error: new Error('ECONNRESET') });
+      await expect(fetchUserProfileFromGraph('token')).rejects.toThrow('Graph API network error: ECONNRESET');
+    });
+
+    test('rejects and destroys the request on timeout', async () => {
+      queueResponses({ timeout: true });
+      await expect(fetchUserProfileFromGraph('token')).rejects.toThrow('Graph API request timed out');
+    });
   });
 });
