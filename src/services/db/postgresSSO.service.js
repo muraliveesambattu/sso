@@ -214,16 +214,35 @@ const upsertOidcConfig = async ({
   company_id, client_id, auth_method, client_secret, redirect_uri,
   private_key_b64, client_cert_thumbprint, keep_existing_cert,
 }, tx) => {
-  // Encrypt the client secret before storing — never stored as plain text
-  const encryptedSecret = client_secret ? encrypt(client_secret) : null;
-  logger.debug(`[POSTGRES] Client secret encrypted for storage | company_id: ${company_id}`);
+  // Secrets are read once here so both the client secret and the certificate can
+  // fall back to what is already stored. Only fetched when something is missing
+  // from the payload — a create with both present does no extra query.
+  const needsExisting = !client_secret || (keep_existing_cert && !private_key_b64);
+  const existingOidc  = needsExisting
+    ? await OidcConfiguration.findOne({ where: { company_id }, transaction: tx })
+    : null;
+
+  // Encrypt the client secret before storing — never stored as plain text.
+  //
+  // An omitted client_secret means "keep the stored one", NOT "clear it". The
+  // GET response only returns `client_secret_set` and strips the value, so an
+  // admin editing any other field (JIT toggle, domains, mappings) cannot resend
+  // it — treating omission as a delete silently wiped the secret and every
+  // subsequent login failed with AADSTS7000215. To clear one deliberately, send
+  // an explicit empty string.
+  let encryptedSecret = client_secret ? encrypt(client_secret) : null;
+  if (client_secret === undefined && existingOidc?.client_secret_enc) {
+    encryptedSecret = existingOidc.client_secret_enc;
+    logger.debug(`[POSTGRES] Reusing existing client secret for company_id: ${company_id}`);
+  } else if (encryptedSecret) {
+    logger.debug(`[POSTGRES] Client secret encrypted for storage | company_id: ${company_id}`);
+  }
 
   // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest.
   // When keep_existing_cert=true and no new key was extracted, reuse what's in the DB.
   let encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
   let resolvedThumbprint  = client_cert_thumbprint || null;
   if (keep_existing_cert && !private_key_b64) {
-    const existingOidc = await OidcConfiguration.findOne({ where: { company_id }, transaction: tx });
     if (existingOidc) {
       encryptedPrivateKey = existingOidc.private_key_enc;
       resolvedThumbprint  = existingOidc.client_cert_thumbprint;

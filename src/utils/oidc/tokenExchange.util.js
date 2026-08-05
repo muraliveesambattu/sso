@@ -23,8 +23,14 @@ const buildRequestParams = (code, clientId, authMethod, authCredential, redirect
   };
 
   switch (authMethod) {
+    // 'secret' is the console's raw form value — it reaches this column when a
+    // save path skips AUTH_METHOD_MAP's translation to 'client_secret_post'.
+    // resolveAuthCredential already accepts it, so accepting it here keeps the
+    // two switches in step; otherwise the credential resolves and the request
+    // body build throws.
     case 'client_secret_post':
     case 'client_secret':
+    case 'secret':
       return new URLSearchParams({ ...base, client_secret: authCredential });
 
     case 'none': {

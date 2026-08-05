@@ -200,162 +200,346 @@ const denyNoRole = (companyId, protocol, identity, reason) => {
  * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
  */
 const resolveUser = async (companyId, claims, protocol) => {
-  // Step 1: Get jit_enabled for this company
+  logger.info('==================== RESOLVE_USER START ====================');
+  logger.info('[RESOLVE_USER][INPUT]', {
+    companyId,
+    protocol,
+    claims,
+  });
+
+  // Step 1: Get integration
   const integration = await getSsoIntegrationByCompanyId(companyId);
 
+  logger.info('[RESOLVE_USER][INTEGRATION]', {
+    companyId,
+    integrationFound: !!integration,
+    integration,
+  });
+
   if (!integration) {
+    logger.info('[RESOLVE_USER][ERROR][INTEGRATION_NOT_FOUND]', {
+      companyId,
+    });
+
     const err = new Error(`SSO integration not found for company: ${companyId}`);
     err.statusCode = 404;
     err.code = 'INTEGRATION_NOT_FOUND';
     throw err;
   }
 
-  // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
-  // Flag takes priority over the sso_integrations.jit_status column.
-  // This lets admins disable JIT without changing the SSO config record.
+  // JIT flag
   const jitFlag = await isEnabled(companyId, 'jit_enabled');
   const jitEnabled = integration.jit_status === true && jitFlag;
 
-  if (integration.jit_status && !jitFlag) {
-    logger.info('JIT provisioning disabled by feature flag', {
-      action: 'jit_flag_blocked', company_id: companyId,
-    });
-  }
+  logger.info('[RESOLVE_USER][JIT_CONFIG]', {
+    companyId,
+    integrationJitStatus: integration.jit_status,
+    featureFlag: jitFlag,
+    jitEnabled,
+  });
 
-  // Step 2: Extract normalised identity
+  // Identity
   const identity = extractIdentity(claims, protocol);
 
+  logger.info('[RESOLVE_USER][IDENTITY]', {
+    email: identity?.email,
+    oid: identity?.oid,
+    displayName: identity?.displayName,
+    identity,
+  });
+
   if (!identity.oid || !identity.email) {
-    const err = new Error('Identity claims missing required fields: oid and email');
+    logger.info('[RESOLVE_USER][ERROR][MISSING_IDENTITY_CLAIMS]', {
+      identity,
+    });
+
+    const err = new Error(
+      'Identity claims missing required fields: oid and email'
+    );
     err.statusCode = 400;
     err.code = 'MISSING_IDENTITY_CLAIMS';
     throw err;
   }
 
-  // ── JIT ENABLED ────────────────────────────────────────────────────────────
+  // =========================================================
+  // JIT ENABLED
+  // =========================================================
+
   if (jitEnabled) {
+    logger.info('[JIT][FLOW_STARTED]', {
+      companyId,
+      email: identity.email,
+      oid: identity.oid,
+    });
+
     const roles = await resolveRoles(companyId, identity);
 
-    // No mapping matched and no 'default' mapping exists. Checked BEFORE any
-    // create/update so a denied attempt leaves no orphan user row behind and
-    // does not wipe an existing user's stored roles.
+    logger.info('[JIT][ROLES_RESOLVED]', {
+      roleCount: roles.length,
+      roles,
+    });
+
     if (roles.length === 0) {
-      denyNoRole(companyId, protocol, identity, 'no_jit_mapping_matched');
+      logger.info('[JIT][NO_ROLE_MAPPING_FOUND]', {
+        companyId,
+        email: identity.email,
+      });
+
+      denyNoRole(
+        companyId,
+        protocol,
+        identity,
+        'no_jit_mapping_matched'
+      );
     }
 
     let user = await findUserByOid(companyId, identity.oid);
+
+    logger.info('[JIT][USER_LOOKUP_BY_OID]', {
+      oid: identity.oid,
+      found: !!user,
+      user,
+    });
+
     let action;
 
     if (user) {
-      // Re-login — sync roles + update last_login
+      logger.info('[JIT][EXISTING_USER_UPDATE_START]', {
+        userId: user.user_id || user.id,
+        existingRoles: user.roles,
+        newRoles: roles.map(r => r.role_id),
+      });
+
       await updateUser(user.user_id || user.id, {
         roles: roles.map(r => r.role_id),
         display_name: identity.displayName || user.display_name,
         last_login: new Date().toISOString(),
       });
+
       action = 'updated';
-      logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
+
+      logger.info('[JIT][USER_UPDATED_SUCCESS]', {
+        userId: user.user_id || user.id,
+        email: identity.email,
+        roles: roles.map(r => r.role_id),
+      });
     } else {
-      // First login — create user
-      user = await createUser({
+      const payload = {
         user_id: crypto.randomUUID(),
         company_id: companyId,
         email: identity.email,
         oid: identity.oid,
         display_name: identity.displayName,
         roles: roles.map(r => r.role_id),
-        login_method: 'sso',   // records that this user authenticates via SSO
+        login_method: 'sso',
         jit_provisioned: true,
         last_login: new Date().toISOString(),
-      });
+      };
+
+      logger.info('[JIT][CREATE_USER_PAYLOAD]', payload);
+
+      user = await createUser(payload);
+
       action = 'created';
-      logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
+
+      logger.info('[JIT][USER_CREATED_SUCCESS]', {
+        user,
+      });
     }
+
+    logger.info('[JIT][FLOW_COMPLETED]', {
+      action,
+      email: identity.email,
+    });
 
     return { user, roles, action };
   }
 
-  // ── JIT DISABLED (non-JIT) ─────────────────────────────────────────────────
-  // Step A — Firestore lookup by email under tenant
-  logger.debug('[NON-JIT] Looking up user | companyId:', companyId, '| email:', identity.email);
+  // =========================================================
+  // NON JIT FLOW
+  // =========================================================
 
-  const snapshot = await admin.firestore()
+  logger.info('[NON_JIT][FLOW_STARTED]', {
+    companyId,
+    email: identity.email,
+    oid: identity.oid,
+  });
+
+  const snapshot = await admin
+    .firestore()
     .collection('tenants')
     .doc(companyId)
     .collection('users')
     .where('email', '==', identity.email)
     .limit(1)
-    .get()
+    .get();
 
-  const user = snapshot.empty ? null : snapshot.docs[0].data()
+  logger.info('[NON_JIT][EMAIL_LOOKUP_RESULT]', {
+    email: identity.email,
+    empty: snapshot.empty,
+    size: snapshot.size,
+  });
 
-  // Step B — Not provisioned
+  const user = snapshot.empty ? null : snapshot.docs[0].data();
+
+  logger.info('[NON_JIT][USER_RECORD]', user);
+
   if (!user) {
-    logger.warn('[NON-JIT] User not found in Firestore | email:', identity.email, '| companyId:', companyId);
+    logger.info('[NON_JIT][ERROR][USER_NOT_PROVISIONED]', {
+      companyId,
+      email: identity.email,
+    });
+
     const err = new Error('You are not allowed to login using SSO');
     err.statusCode = 403;
     err.code = 'USER_NOT_PROVISIONED';
     throw err;
   }
 
-  // Step C — Wrong login method
+  logger.info('[NON_JIT][LOGIN_METHOD_CHECK]', {
+    expected: 'Entra SSO',
+    actual: user.loginMethod,
+  });
+
   if (user.loginMethod !== 'Entra SSO') {
-    logger.warn('[NON-JIT] Login method mismatch | loginMethod:', user.loginMethod);
+    logger.info('[NON_JIT][ERROR][LOGIN_METHOD_NOT_ALLOWED]', {
+      loginMethod: user.loginMethod,
+    });
+
     const err = new Error('You are not allowed to login using zDNA SSO');
     err.statusCode = 403;
     err.code = 'LOGIN_METHOD_NOT_ALLOWED';
     throw err;
   }
 
-  // Step D — Expired
+  logger.info('[NON_JIT][STATUS_CHECK]', {
+    status: user.status,
+  });
+
   if (user.status === 'expired') {
-    const err = new Error('Your account has expired. Please contact your administrator');
+    logger.info('[NON_JIT][ERROR][USER_EXPIRED]', {
+      email: user.email,
+      status: user.status,
+    });
+
+    const err = new Error(
+      'Your account has expired. Please contact your administrator'
+    );
     err.statusCode = 403;
     err.code = 'USER_EXPIRED';
     throw err;
   }
 
-  // Step E — Resolve role
   const roleId = user.roleId || user.role_id;
 
-  // Step E.1 — Deny when the provisioned user carries no role. Placed BEFORE
-  // Step F so a denied attempt is not recorded as a successful login and does
-  // not flip an invited user's status to "Joined".
+  logger.info('[NON_JIT][ROLE_RESOLUTION]', {
+    roleId,
+    roleIdField: user.roleId ? 'roleId' : 'role_id',
+  });
+
   if (!roleId) {
-    denyNoRole(companyId, protocol, identity, 'user_has_no_role_id');
+    logger.info('[NON_JIT][ERROR][NO_ROLE_FOUND]', {
+      user,
+    });
+
+    denyNoRole(
+      companyId,
+      protocol,
+      identity,
+      'user_has_no_role_id'
+    );
   }
 
   const roles = [{ role_id: roleId }];
 
-  // Step F — Update lastLoginAt + invited → joined
   const currentTime = Date.now();
-  const usersSnapshot = await admin.firestore()
-    .collection("tenants")
+
+  // The Firestore user document stores the id as `UUID` — reading `user.userUUID`
+  // yielded undefined, and Firestore rejects an undefined query constraint
+  // outright ("Cannot use \"undefined\" as a Firestore value"), which failed a
+  // login that had already passed every check. See userData.UUID below, which
+  // was always reading the correct property.
+  logger.info('[NON_JIT][UUID_LOOKUP_START]', {
+    userUUID: user?.UUID,
+  });
+
+  const usersSnapshot = await admin
+    .firestore()
+    .collection('tenants')
     .doc(companyId)
-    .collection("users")
-    .where("UUID", "==", user?.userUUID)
+    .collection('users')
+    .where('UUID', '==', user?.UUID)
     .get();
+
+  logger.info('[NON_JIT][UUID_LOOKUP_RESULT]', {
+    empty: usersSnapshot.empty,
+    size: usersSnapshot.size,
+  });
+
   if (!usersSnapshot.empty) {
     const userDoc = usersSnapshot.docs[0];
     const userData = userDoc.data();
-    if (userData.loginMethod === "Entra SSO") {
-      // Update user document
+
+    logger.info('[NON_JIT][USER_DOC_DATA]', userData);
+
+    if (userData.loginMethod === 'Entra SSO') {
+      logger.info('[NON_JIT][UPDATING_USER_STATUS]', {
+        userUUID: userData.UUID,
+        currentStatus: userData.status,
+        newStatus: 'Joined',
+        currentTime,
+      });
+
       await userDoc.ref.update({
-        status: "Joined",
+        status: 'Joined',
         lastLoginTime: currentTime,
         updatedDateTime: currentTime,
       });
-      // Update tenant document
-      await admin.firestore().collection("tenants").doc(companyId).update({
-        lastLoginTime: currentTime,
-        updatedDateTime: currentTime,
+
+      logger.info('[NON_JIT][USER_DOC_UPDATED_SUCCESS]', {
+        userUUID: userData.UUID,
+        status: 'Joined',
+      });
+
+      await admin
+        .firestore()
+        .collection('tenants')
+        .doc(companyId)
+        .update({
+          lastLoginTime: currentTime,
+          updatedDateTime: currentTime,
+        });
+
+      logger.info('[NON_JIT][TENANT_UPDATED_SUCCESS]', {
+        companyId,
+        currentTime,
+      });
+    } else {
+      logger.info('[NON_JIT][STATUS_UPDATE_SKIPPED]', {
+        reason: 'loginMethod is not Entra SSO',
+        loginMethod: userData.loginMethod,
       });
     }
+  } else {
+    logger.info('[NON_JIT][UUID_LOOKUP_EMPTY]', {
+      userUUID: user?.UUID,
+    });
   }
 
-  logger.debug('[NON-JIT] User login success | email:', identity.email, '| loginMethod:', user.loginMethod, '| roleId:', roleId);
+  logger.info('[NON_JIT][LOGIN_SUCCESS]', {
+    email: identity.email,
+    roleId,
+    loginMethod: user.loginMethod,
+    companyId,
+  });
 
-  return { user, roles, action: 'login' };
+  logger.info('==================== RESOLVE_USER END ====================');
+
+  return {
+    user,
+    roles,
+    action: 'login',
+  };
 };
 
 module.exports = { resolveUser };

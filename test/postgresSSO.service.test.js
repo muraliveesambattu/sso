@@ -195,6 +195,76 @@ describe('postgresSSO.service', () => {
     expect(mocks.transaction.commit).toHaveBeenCalled();
   });
 
+  // Regression: the GET response strips client_secret_enc and returns only
+  // client_secret_set, so an admin editing any other field cannot resend the
+  // secret. Treating an omitted secret as "clear it" silently wiped stored
+  // credentials and every later login failed with AADSTS7000215.
+  test('an edit that omits client_secret keeps the stored one', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
+    mocks.OidcConfiguration.findOne.mockResolvedValue({
+      client_secret_enc: 'enc:original-secret',
+      private_key_enc: null,
+      client_cert_thumbprint: null,
+    });
+
+    // Payload from a JIT-toggle edit: no client_secret field at all.
+    await service.saveSsoConfig({
+      company_id: 'existing-company',
+      protocol: 'oidc',
+      domains: 'example.com',
+      client_id: 'client-1',
+      auth_method: 'client_secret_post',
+      jit_enabled: true,
+    });
+
+    expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ client_secret_enc: 'enc:original-secret' }),
+      { transaction: mocks.transaction },
+    );
+    expect(mocks.encrypt).not.toHaveBeenCalledWith(undefined);
+  });
+
+  test('an explicit empty client_secret clears the stored one', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
+    mocks.OidcConfiguration.findOne.mockResolvedValue({ client_secret_enc: 'enc:original-secret' });
+
+    await service.saveSsoConfig({
+      company_id: 'existing-company',
+      protocol: 'oidc',
+      domains: 'example.com',
+      client_id: 'client-1',
+      auth_method: 'client_secret_post',
+      client_secret: '',
+    });
+
+    expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ client_secret_enc: null }),
+      { transaction: mocks.transaction },
+    );
+  });
+
+  test('a new secret overwrites the stored one', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
+    mocks.OidcConfiguration.findOne.mockResolvedValue({ client_secret_enc: 'enc:original-secret' });
+
+    await service.saveSsoConfig({
+      company_id: 'existing-company',
+      protocol: 'oidc',
+      domains: 'example.com',
+      client_id: 'client-1',
+      auth_method: 'client_secret_post',
+      client_secret: 'rotated-secret',
+    });
+
+    expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ client_secret_enc: 'enc:rotated-secret' }),
+      { transaction: mocks.transaction },
+    );
+  });
+
   test('saves SAML configs, updates users, and returns booleans for status/delete operations', async () => {
     const { service, mocks } = loadPostgresService();
     mocks.SsoIntegration.findOne.mockResolvedValue(null);
