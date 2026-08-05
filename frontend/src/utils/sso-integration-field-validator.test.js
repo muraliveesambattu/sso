@@ -31,7 +31,7 @@ const textFile = (name, content) => ({
 const binaryFile = (name, bytes) => ({
   name,
   size: bytes.length,
-  text: async () => String.fromCharCode(...bytes),
+  text: async () => String.fromCodePoint(...bytes),
   arrayBuffer: async () => new Uint8Array(bytes).buffer,
 });
 

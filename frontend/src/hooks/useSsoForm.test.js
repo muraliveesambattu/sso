@@ -36,7 +36,7 @@ const OIDC_PKCE = {
   entra_domain: 'contoso.com',
 };
 
-const fileEvent = (file) => ({ target: { files: [file], value: 'C:\\fake\\path' } });
+const fileEvent = (file) => ({ target: { files: [file], value: String.raw`C:\fake\path` } });
 const fakeFile = (name, size) => ({ name, size, text: async () => '', arrayBuffer: async () => new ArrayBuffer(0) });
 
 beforeEach(() => {
