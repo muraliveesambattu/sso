@@ -3,12 +3,14 @@ const crypto = require('node:crypto');
 const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 const { microsoft } = require('../../config/constants');
 const { isCertAuth }        = require('../../utils/shared/authMethod.util');
+const ssoIntegration = require('../../models/ssoIntegration.model');
+const { Op } = require('sequelize');
 
 // SSRF/traversal allowlist for fetchJson. Deliberately arrays checked with
 // .includes(), NOT Sets with .has(): that is the form the security rules'
 // (S5144/S7044) compliant solutions prescribe, and each list is tiny, so the
 // O(n)-lookup rationale behind S7776 does not apply.
-const ALLOWED_SCHEMES = ['https:'];
+const ALLOWED_SCHEMES = new Set(['https:']);;
 const ALLOWED_HOSTS   = microsoft.allowedHosts;
 
 const blockedUrlError = () => {
@@ -29,7 +31,7 @@ const fetchJson = (url, options) =>
     let target;
     try { target = new URL(url); } catch { return reject(blockedUrlError()); }
 
-    if (ALLOWED_SCHEMES.includes(target.protocol) && ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
+    if (ALLOWED_SCHEMES.has(target.protocol) && ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
       const body    = options.body || null;
       const headers = { ...options.headers };
       if (body) headers['Content-Length'] = Buffer.byteLength(body);
@@ -253,8 +255,29 @@ const isValidTenantScope = (tenant_id) =>
   typeof tenant_id === 'string' && (UUID_RE.test(tenant_id) || TENANT_SCOPES.has(tenant_id));
 
 const testConnection = async (payload) => {
-  const { protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope } = payload;
+  const { protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope , company_id } = payload;
 
+  if (tenant_id) {
+    try {
+      const existingTenant = await ssoIntegration.findOne({
+        where: {
+          entra_tenant_id: tenant_id,
+        }
+      });
+      if (existingTenant && existingTenant.company_id != company_id && existingTenant.company_id != null) {
+        return {
+          success: false,
+          message: 'This Microsoft Entra tenant ID is already registered by another organization.'
+        };
+      }
+    } catch (dbError) {
+      console.error('Database verification failed:', dbError);
+      return {
+        success: false,
+        message: 'Internal server error occurred while verifying tenant configuration.'
+      };
+    }
+  }
   // Single gate for every URL built from tenant_id below (absent is fine —
   // SAML with an sso_url derives its tenant from the URL's validated GUID).
   if (tenant_id && !isValidTenantScope(tenant_id)) {

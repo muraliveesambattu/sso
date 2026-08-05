@@ -5,6 +5,17 @@ jest.mock('../src/utils/oidc/pkcs12.util', () => ({
   })),
 }));
 
+// testConnection now pre-checks that the Entra tenant isn't already claimed by
+// another organisation. Mocking the model keeps sequelize (and config/db) out
+// of this suite — requiring the real one pulls in a live DB connection.
+jest.mock('../src/models/ssoIntegration.model', () => ({ findOne: jest.fn() }));
+
+// testConnection.service also does `const { Op } = require('sequelize')`, which
+// it never uses. The import alone is enough to load the real ORM, so it is
+// stubbed here. Deleting that dead import from the service would remove the
+// need for this mock entirely.
+jest.mock('sequelize', () => ({ Op: {}, DataTypes: {} }));
+
 jest.mock('../src/config/constants', () => ({
   microsoft: {
     tokenUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
@@ -23,6 +34,7 @@ const crypto = require('node:crypto');
 const http = require('node:http');
 const https = require('node:https');
 const { extractFromPkcs12 } = require('../src/utils/oidc/pkcs12.util');
+const ssoIntegration = require('../src/models/ssoIntegration.model');
 const { testConnection } = require('../src/services/SSO/testConnection.service');
 
 const mockRequest = (moduleRef, responder) => jest.spyOn(moduleRef, 'request').mockImplementation((url, options, callback) => {
@@ -54,6 +66,9 @@ describe('testConnection.service', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: the tenant isn't claimed by anyone, so the pre-check passes
+    // through to the protocol branches every existing test exercises.
+    ssoIntegration.findOne.mockResolvedValue(null);
     process.env.OIDC_REDIRECT_URI = 'http://localhost:3000/auth/oidc/callback';
   });
 
@@ -368,5 +383,82 @@ describe('testConnection.service', () => {
       const result = await testConnection({ protocol: 'oidc', auth_method: 'none', tenant_id: tenant, client_id: 'c' });
       expect(result.success).toBe(true);
     }
+  });
+
+  // ── Entra tenant ownership pre-check ────────────────────────────────────────
+  // An Entra tenant may only be claimed by one organisation. This runs before
+  // any outbound request, so a conflict never reaches Microsoft.
+  describe('tenant ownership pre-check', () => {
+    test('rejects a tenant already registered by a different company', async () => {
+      const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: '{}' }));
+      ssoIntegration.findOne.mockResolvedValue({ company_id: 'other-company' });
+
+      const result = await testConnection({
+        protocol: 'oidc',
+        tenant_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        company_id: 'my-company',
+      });
+
+      expect(result).toEqual({
+        success: false,
+        message: 'This Microsoft Entra tenant ID is already registered by another organization.',
+      });
+      expect(httpsSpy).not.toHaveBeenCalled();
+    });
+
+    test('allows the same company to re-test its own tenant', async () => {
+      mockRequest(https, () => ({ statusCode: 200, body: JSON.stringify({ issuer: 'https://sts.windows.net/x/' }) }));
+      ssoIntegration.findOne.mockResolvedValue({ company_id: 'my-company' });
+
+      const result = await testConnection({
+        protocol: 'oidc',
+        tenant_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        company_id: 'my-company',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    test('allows an existing row that has no owner yet', async () => {
+      mockRequest(https, () => ({ statusCode: 200, body: JSON.stringify({ issuer: 'https://sts.windows.net/x/' }) }));
+      ssoIntegration.findOne.mockResolvedValue({ company_id: null });
+
+      const result = await testConnection({
+        protocol: 'oidc',
+        tenant_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        company_id: 'my-company',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    test('surfaces a database failure without leaking the driver error', async () => {
+      const httpsSpy = mockRequest(https, () => ({ statusCode: 200, body: '{}' }));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+      ssoIntegration.findOne.mockRejectedValue(new Error('ECONNRESET'));
+
+      const result = await testConnection({
+        protocol: 'oidc',
+        tenant_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        company_id: 'my-company',
+      });
+
+      expect(result).toEqual({
+        success: false,
+        message: 'Internal server error occurred while verifying tenant configuration.',
+      });
+      expect(httpsSpy).not.toHaveBeenCalled();
+    });
+
+    test('skips the lookup entirely when no tenant_id is supplied', async () => {
+      mockRequest(https, () => ({ statusCode: 200, body: '<xml/>' }));
+
+      await testConnection({
+        protocol: 'saml',
+        sso_url: 'https://login.microsoftonline.com/7c9e6679-7425-40de-944b-e07fc1f90ae7/saml2',
+      });
+
+      expect(ssoIntegration.findOne).not.toHaveBeenCalled();
+    });
   });
 });
