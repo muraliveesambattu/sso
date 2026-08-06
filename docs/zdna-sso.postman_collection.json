@@ -1,0 +1,385 @@
+{
+  "info": {
+    "name": "ZDNA SSO Microservice",
+    "description": "Endpoints for the zdna-sso microservice.\n\n## Auth\nAdmin endpoints accept EITHER:\n- `X-Admin-Api-Key: {{adminApiKey}}` — service path, any company\n- `Authorization: Bearer {{idToken}}` — a Firebase ID token; the caller is scoped to their own company_id and must hold the named permission\n\nThe collection sends the admin key by default. To exercise the token path instead, clear `adminApiKey` and set `idToken`.\n\n## Base URL\nRoutes are mounted at BOTH `/v1/auth` and `/auth`. `{{baseUrl}}` should NOT include either — the requests add `/v1/auth`.\n\n`/health` is the one exception: it lives at the root.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://sso-382085429283.us-central1.run.app", "type": "string" },
+    { "key": "adminApiKey", "value": "", "type": "string" },
+    { "key": "idToken", "value": "", "type": "string" },
+    { "key": "companyId", "value": "DmorrzW14rKLFrX7JFmC", "type": "string" },
+    { "key": "tenantId", "value": "2c761afb-5a70-452a-ab62-b98b90a6e556", "type": "string" },
+    { "key": "clientId", "value": "145f5523-0ddb-4e8e-9e51-9445cc79d31e", "type": "string" },
+    { "key": "domain", "value": "secret0508.com", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "redirectUri", "value": "https://dnacloud-demo2-t.web.app/auth/oidc/callback", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "Liveness check. Mounted at the root, not under /v1/auth."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SSO Config",
+      "item": [
+        {
+          "name": "GET config (by company_id)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" },
+              { "key": "Authorization", "value": "Bearer {{idToken}}", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/config?company_id={{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "config"],
+              "query": [{ "key": "company_id", "value": "{{companyId}}" }]
+            },
+            "description": "Requires my_services:view. Secrets are stripped — the response returns `client_secret_set: true|false`, never the value."
+          }
+        },
+        {
+          "name": "GET config (by domain)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/config?domain={{domain}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "config"],
+              "query": [{ "key": "domain", "value": "{{domain}}" }]
+            }
+          }
+        },
+        {
+          "name": "POST save — OIDC client secret",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/save", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "save"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"protocol\": \"oidc\",\n  \"idp\": \"entra\",\n  \"domains\": [\"{{domain}}\"],\n  \"tenant_id\": \"{{tenantId}}\",\n  \"client_id\": \"{{clientId}}\",\n  \"auth_method\": \"client_secret_post\",\n  \"client_secret\": \"REPLACE_WITH_SECRET_VALUE\",\n  \"redirect_uri\": \"{{redirectUri}}\",\n  \"jit_enabled\": true,\n  \"jit_mappings\": [\n    { \"zdna_role\": \"Admin\", \"mapping_source\": \"role\", \"mapping_value\": \"Zebra.Admin\", \"order\": 1 }\n  ]\n}"
+            },
+            "description": "NOTE: `jit_enabled` is the documented field; the controller also accepts `jit_status` as an alias.\n\nOmitting `client_secret` KEEPS the stored one (an explicit empty string clears it). Same rule for the certificate."
+          }
+        },
+        {
+          "name": "POST save — partial update (mappings only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/save", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "save"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"protocol\": \"oidc\",\n  \"idp\": \"entra\",\n  \"domains\": [\"{{domain}}\"],\n  \"tenant_id\": \"{{tenantId}}\",\n  \"client_id\": \"{{clientId}}\",\n  \"auth_method\": \"client_secret_post\",\n  \"jit_enabled\": true,\n  \"jit_mappings\": [\n    { \"zdna_role\": \"Manager\", \"mapping_source\": \"role\", \"mapping_value\": \"Zebra.Manager\", \"order\": 1 }\n  ]\n}"
+            },
+            "description": "Mirrors what the console's 'Manage roles' sends — no client_secret, no certificate. Regression check: the stored credential must SURVIVE this call. Verify with the GET config request (`client_secret_set` stays true)."
+          }
+        },
+        {
+          "name": "POST save — OIDC client certificate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/save", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "save"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"protocol\": \"oidc\",\n  \"idp\": \"entra\",\n  \"domains\": [\"{{domain}}\"],\n  \"tenant_id\": \"{{tenantId}}\",\n  \"client_id\": \"{{clientId}}\",\n  \"auth_method\": \"private_key_jwt\",\n  \"certificate\": \"BASE64_OF_PFX\",\n  \"certificate_password\": \"PFX_PASSWORD\",\n  \"redirect_uri\": \"{{redirectUri}}\",\n  \"jit_enabled\": false\n}"
+            },
+            "description": "`certificate` is base64 of the .pfx (a data-URL prefix is tolerated and stripped). The service extracts the private key + SHA-1 thumbprint via openssl."
+          }
+        },
+        {
+          "name": "POST save — SAML",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/save", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "save"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"protocol\": \"saml\",\n  \"idp\": \"entra\",\n  \"domains\": [\"{{domain}}\"],\n  \"tenant_id\": \"{{tenantId}}\",\n  \"sso_url\": \"https://login.microsoftonline.com/{{tenantId}}/saml2?appid={{clientId}}\",\n  \"certificate\": \"BASE64_OF_PEM_CERT\",\n  \"sign_auth\": false,\n  \"jit_enabled\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "PATCH status (activate / deactivate)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/config/{{companyId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "config", "{{companyId}}", "status"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"active\"\n}" },
+            "description": "status: \"active\" | \"inactive\""
+          }
+        },
+        {
+          "name": "DELETE config",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/config/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "config", "{{companyId}}"]
+            },
+            "description": "Destructive — removes the integration, protocol config, JIT mappings and domains for this company."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Test Connection",
+      "item": [
+        {
+          "name": "POST test-connection — OIDC",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/test-connection", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "test-connection"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"protocol\": \"oidc\",\n  \"company_id\": \"{{companyId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"client_id\": \"{{clientId}}\",\n  \"auth_method\": \"client_secret_post\",\n  \"client_secret\": \"REPLACE_WITH_SECRET_VALUE\",\n  \"domains\": [\"{{domain}}\"],\n  \"redirect_uri\": \"{{redirectUri}}\",\n  \"scope\": \"openid profile email\"\n}"
+            },
+            "description": "CAUTION: with auth_method other than client_secret_post, or with client_secret omitted, this silently falls back to a tenant-reachability check (discovery document) and can pass WITHOUT validating any credential."
+          }
+        },
+        {
+          "name": "POST test-connection — SAML",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/test-connection", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "test-connection"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"protocol\": \"saml\",\n  \"company_id\": \"{{companyId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"sso_url\": \"https://login.microsoftonline.com/{{tenantId}}/saml2?appid={{clientId}}\",\n  \"certificate\": \"BASE64_OF_PEM_CERT\",\n  \"domains\": [\"{{domain}}\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "POST test-connection/oidc/callback",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/test-connection/oidc/callback",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "test-connection", "oidc", "callback"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"AUTH_CODE_FROM_POPUP\",\n  \"state\": \"STATE_FROM_POPUP\",\n  \"company_id\": \"{{companyId}}\",\n  \"sessionRef\": \"SESSION_REF_FROM_TEST_CONNECTION\"\n}"
+            },
+            "description": "No auth header — this is the public Entra redirect target. Auth codes are single-use, so each run needs a fresh popup."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "GET /sso/me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{idToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/me", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "me"] },
+            "description": "Bearer ONLY — requireUser does not accept the admin key. Returns the caller's resolved permissions."
+          }
+        },
+        {
+          "name": "GET /sso/users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/users?company_id={{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "users"],
+              "query": [{ "key": "company_id", "value": "{{companyId}}" }]
+            }
+          }
+        },
+        {
+          "name": "POST /sso/users",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/sso/users", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "sso", "users"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"email\": \"user@example.com\",\n  \"display_name\": \"Test User\",\n  \"roles\": [\"Admin\"]\n}"
+            },
+            "description": "Pre-provisioning for the non-JIT path. `oid` is optional — a `pending:` placeholder is used until first login."
+          }
+        },
+        {
+          "name": "PATCH /sso/users/:user_id",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "users", "{{userId}}"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"roles\": [\"Manager\"],\n  \"display_name\": \"Renamed User\"\n}" }
+          }
+        },
+        {
+          "name": "DELETE /sso/users/:user_id",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/sso/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "sso", "users", "{{userId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Feature Flags",
+      "item": [
+        {
+          "name": "GET flags for a company",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/admin/flags/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "admin", "flags", "{{companyId}}"]
+            },
+            "description": "Admin key ONLY — the Bearer path is not accepted here. Flags: sso_enabled, jit_enabled."
+          }
+        },
+        {
+          "name": "POST set a flag",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Api-Key", "value": "{{adminApiKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/auth/admin/flags", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "admin", "flags"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"flag\": \"jit_enabled\",\n  \"enabled\": true\n}"
+            },
+            "description": "Precedence: env kill-switch FEATURE_<FLAG>_DISABLED → Firestore feature_flags/{companyId} → this DB row → default true. Setting the DB row will NOT win over the env var or a Firestore doc."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login Flows",
+      "item": [
+        {
+          "name": "POST domain-check",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/v1/auth/domain-check", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "domain-check"] },
+            "body": { "mode": "raw", "raw": "{\n  \"domain\": \"{{domain}}\"\n}" },
+            "description": "Public, rate-limited. Returns { found, protocol, company_id, config | redirectUrl } used by the login page to route to the IdP."
+          }
+        },
+        {
+          "name": "POST oidc/token-exchange",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/oidc/token-exchange",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "oidc", "token-exchange"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"AUTH_CODE_FROM_ENTRA\",\n  \"company_id\": \"{{companyId}}\",\n  \"state\": \"STATE_FROM_AUTHORIZE\"\n}"
+            },
+            "description": "Public. Needs a live auth code + a `state` that exists in the server-side state store, so it is not replayable from Postman — included for shape reference and error-path testing.\n\nError codes worth recognising: NO_ROLE_ASSIGNED (403), USER_NOT_PROVISIONED (403), LOGIN_METHOD_NOT_ALLOWED (403), USER_EXPIRED (403), TENANT_MISMATCH (401), TOKEN_EXCHANGE_FAILED (500 — generic, real cause is server-side only)."
+          }
+        },
+        {
+          "name": "GET oidc/callback (redirect target)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/oidc/callback?code=AUTH_CODE&state=STATE",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "oidc", "callback"],
+              "query": [
+                { "key": "code", "value": "AUTH_CODE" },
+                { "key": "state", "value": "STATE" }
+              ]
+            },
+            "description": "Entra redirects the browser here; the service 302s to FRONTEND_URL. Turn OFF Postman's automatic redirect following to inspect the Location header."
+          }
+        },
+        {
+          "name": "POST callback (SAML ACS)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": { "raw": "{{baseUrl}}/v1/auth/callback", "host": ["{{baseUrl}}"], "path": ["v1", "auth", "callback"] },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "SAMLResponse", "value": "BASE64_SAML_RESPONSE" },
+                { "key": "RelayState", "value": "RELAY_STATE" }
+              ]
+            },
+            "description": "Form POST, not JSON. Rate-limited. Redirects to the frontend with ?token= on success or ?error=<CODE> on failure."
+          }
+        }
+      ]
+    }
+  ]
+}
