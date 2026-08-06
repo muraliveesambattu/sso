@@ -254,6 +254,31 @@ describe('saveSsoConfig.service', () => {
     }));
   });
 
+  // Regression: a partial update (Manage roles, domains, the JIT toggle) sends
+  // auth_method: 'private_key_jwt' but no .pfx — the console cannot resend one
+  // because the GET response never returns the stored key. This used to reach
+  // extractFromPkcs12 and fail the whole save with 400 MISSING_CERTIFICATE.
+  // Now the cert fields are left undefined so the Postgres layer keeps them.
+  test('a cert-auth save with no .pfx leaves the cert fields undefined instead of throwing', async () => {
+    const { saveSsoConfig, pgSave, extractFromPkcs12 } = loadService();
+
+    await expect(saveSsoConfig({
+      protocol: 'oidc',
+      domains: 'cert.example.com',
+      tenant_id: 'organizations',
+      client_id: 'client-cert',
+      auth_method: 'private_key_jwt',
+      jit_enabled: true,
+      jit_mappings: [{ zdna_role: 'Admin', mapping_source: 'role', mapping_value: 'Zebra.Admin' }],
+    })).resolves.not.toThrow();
+
+    expect(extractFromPkcs12).not.toHaveBeenCalled();
+
+    const row = savedRow(pgSave);
+    expect(row.private_key_b64).toBeUndefined();
+    expect(row.client_cert_thumbprint).toBeUndefined();
+  });
+
   test('derives SAML tenant ids from the SSO URL', async () => {
     const { saveSsoConfig, pgSave } = loadService();
 

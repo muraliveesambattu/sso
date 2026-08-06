@@ -130,6 +130,16 @@ const extractCert = async (protocol, auth_method, certificate, certificate_passw
   if (protocol !== 'oidc' || !isCertAuth(auth_method)) {
     return { private_key_b64: null, client_cert_thumbprint: null };
   }
+  // No .pfx in this payload. A partial update — JIT mappings, domains, the JIT
+  // toggle — never carries one, and the GET response never returns the stored
+  // key, so the console cannot resend it. Returning undefined lets
+  // upsertOidcConfig keep what is already stored, matching how an omitted
+  // client_secret is handled. Previously this reached extractFromPkcs12 and
+  // failed the whole save with 400 MISSING_CERTIFICATE.
+  if (!certificate) {
+    logger.debug('[SAVE-SSO] No certificate in payload — keeping the stored key/thumbprint');
+    return { private_key_b64: undefined, client_cert_thumbprint: undefined };
+  }
   const { privateKeyB64, thumbprintHex } = await extractFromPkcs12(certificate, certificate_password);
   logger.debug('[SAVE-SSO] Extracted private key + thumbprint from PKCS#12');
   return { private_key_b64: privateKeyB64, client_cert_thumbprint: thumbprintHex };

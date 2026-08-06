@@ -217,7 +217,7 @@ const upsertOidcConfig = async ({
   // Secrets are read once here so both the client secret and the certificate can
   // fall back to what is already stored. Only fetched when something is missing
   // from the payload — a create with both present does no extra query.
-  const needsExisting = !client_secret || (keep_existing_cert && !private_key_b64);
+  const needsExisting = !client_secret || !private_key_b64;
   const existingOidc  = needsExisting
     ? await OidcConfiguration.findOne({ where: { company_id }, transaction: tx })
     : null;
@@ -239,15 +239,19 @@ const upsertOidcConfig = async ({
   }
 
   // Client Certificate (private_key_jwt) — encrypt the base64(PEM) key at rest.
-  // When keep_existing_cert=true and no new key was extracted, reuse what's in the DB.
+  //
+  // Same contract as the client secret above: an omitted private_key_b64 means
+  // "keep the stored certificate", NOT "clear it". The console never resends a
+  // .pfx on a partial update (JIT mappings, domains, the JIT toggle) and the GET
+  // response never returns the stored key, so requiring keep_existing_cert here
+  // meant those saves wiped the credential. To clear one deliberately, send an
+  // explicit null. keep_existing_cert still works but is no longer required.
   let encryptedPrivateKey = private_key_b64 ? encrypt(private_key_b64) : null;
   let resolvedThumbprint  = client_cert_thumbprint || null;
-  if (keep_existing_cert && !private_key_b64) {
-    if (existingOidc) {
-      encryptedPrivateKey = existingOidc.private_key_enc;
-      resolvedThumbprint  = existingOidc.client_cert_thumbprint;
-      logger.debug(`[POSTGRES] Reusing existing private key for company_id: ${company_id}`);
-    }
+  if ((private_key_b64 === undefined || keep_existing_cert) && !private_key_b64 && existingOidc?.private_key_enc) {
+    encryptedPrivateKey = existingOidc.private_key_enc;
+    resolvedThumbprint  = existingOidc.client_cert_thumbprint;
+    logger.debug(`[POSTGRES] Reusing existing private key for company_id: ${company_id}`);
   } else if (encryptedPrivateKey) {
     logger.debug(`[POSTGRES] Private key encrypted for storage | company_id: ${company_id}`);
   }

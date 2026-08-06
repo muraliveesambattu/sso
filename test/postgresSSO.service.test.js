@@ -225,6 +225,68 @@ describe('postgresSSO.service', () => {
     expect(mocks.encrypt).not.toHaveBeenCalledWith(undefined);
   });
 
+  // Same contract for the Client Certificate (private_key_jwt) method: a
+  // partial update never carries a .pfx, and the GET response never returns the
+  // stored key, so an omitted certificate must mean "keep it". Previously this
+  // required keep_existing_cert — which the console never sends — so a
+  // mappings-only save wiped private_key_enc and the thumbprint.
+  test('an edit that omits the certificate keeps the stored private key and thumbprint', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'cert-company' });
+    mocks.OidcConfiguration.findOne.mockResolvedValue({
+      client_secret_enc: null,
+      private_key_enc: 'enc:original-key',
+      client_cert_thumbprint: 'AABBCCDD',
+    });
+
+    // Payload from a Manage-roles save: no certificate, no keep_existing_cert.
+    await service.saveSsoConfig({
+      company_id: 'cert-company',
+      protocol: 'oidc',
+      domains: 'example.com',
+      client_id: 'client-1',
+      auth_method: 'private_key_jwt',
+      jit_enabled: true,
+    });
+
+    expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        private_key_enc: 'enc:original-key',
+        client_cert_thumbprint: 'AABBCCDD',
+      }),
+      { transaction: mocks.transaction },
+    );
+  });
+
+  test('a newly uploaded certificate replaces the stored one', async () => {
+    const { service, mocks } = loadPostgresService();
+    mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'cert-company' });
+    mocks.OidcConfiguration.findOne.mockResolvedValue({
+      private_key_enc: 'enc:original-key',
+      client_cert_thumbprint: 'AABBCCDD',
+    });
+
+    // postgresSSO receives the ALREADY-extracted key — extractFromPkcs12 runs
+    // upstream in SSO/saveSsoConfig.service.js, not here.
+    await service.saveSsoConfig({
+      company_id: 'cert-company',
+      protocol: 'oidc',
+      domains: 'example.com',
+      client_id: 'client-1',
+      auth_method: 'private_key_jwt',
+      private_key_b64: 'new-key-b64',
+      client_cert_thumbprint: 'NEWTHUMB',
+    });
+
+    expect(mocks.OidcConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        private_key_enc: 'enc:new-key-b64',
+        client_cert_thumbprint: 'NEWTHUMB',
+      }),
+      { transaction: mocks.transaction },
+    );
+  });
+
   test('an explicit empty client_secret clears the stored one', async () => {
     const { service, mocks } = loadPostgresService();
     mocks.SsoDomain.findOne.mockResolvedValue({ company_id: 'existing-company' });
