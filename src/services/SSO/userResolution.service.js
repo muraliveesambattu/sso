@@ -450,7 +450,20 @@ const resolveUser = async (companyId, claims, protocol) => {
     );
   }
 
-  const roles = [{ role_id: roleId }];
+  // role_name matters downstream, so carry it through rather than the id alone:
+  //   - permissionResolver's roleConfigFallback keys the Firestore roleConfig
+  //     lookup on role_name; without it the lookup is skipped and a non-JIT
+  //     user signs in with zero permissions (source: 'none').
+  //   - both token-mint paths read `roles[0]?.role_name || 'user'` for the
+  //     custom token's `role` claim, so an absent name showed every non-JIT
+  //     user as the literal string 'user'.
+  // Falls back to the id when the document carries no roleName — the roleConfig
+  // lookup then finds nothing, which is the pre-existing behaviour.
+  const roles = [{
+    role_id:     roleId,
+    role_name:   user.roleName || roleId,
+    permissions: [],
+  }];
 
   const currentTime = Date.now();
 

@@ -72,11 +72,15 @@ const firestoreDouble = ({ userDoc = null, uuidDoc = undefined } = {}) => {
   return { userRefUpdate, tenantUpdate };
 };
 
+// Mirrors the real Firestore document: the id and the display name are two
+// separate fields, and both matter downstream (permissionResolver keys the
+// roleConfig lookup on the name).
 const ssoUser = (over = {}) => ({
   email: 'user@example.com',
   loginMethod: 'Entra SSO',
-  roleId: 'Admin',
-  userUUID: 'uuid-user-1',
+  roleId: 15559,
+  roleName: 'Manager',
+  UUID: 'uuid-user-1',
   status: 'Joined',
   ...over,
 });
@@ -398,7 +402,7 @@ describe('userResolution.service', () => {
 
   test('allows a non-JIT login, flips the user to Joined, and stamps both documents', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
-    const user = ssoUser({ roleId: 'Manager', status: 'invited' });
+    const user = ssoUser({ status: 'invited' });
     const { userRefUpdate, tenantUpdate } = firestoreDouble({
       userDoc: user,
       // Step F re-reads by UUID; the stored doc still says Entra SSO
@@ -412,7 +416,11 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(result).toEqual({ user, roles: [{ role_id: 'Manager' }], action: 'login' });
+    expect(result).toEqual({
+      user,
+      roles: [{ role_id: 15559, role_name: 'Manager', permissions: [] }],
+      action: 'login',
+    });
 
     expect(userRefUpdate).toHaveBeenCalledWith({
       status: 'Joined',
@@ -435,7 +443,43 @@ describe('userResolution.service', () => {
       groups: [],
     }, 'oidc');
 
-    expect(roles).toEqual([{ role_id: 'Field Technician' }]);
+    expect(roles).toEqual([
+      { role_id: 'Field Technician', role_name: 'Manager', permissions: [] },
+    ]);
+  });
+
+  // role_name drives two things downstream: permissionResolver's roleConfig
+  // lookup (which is skipped entirely without it, leaving the user with zero
+  // permissions) and the custom token's `role` claim, which otherwise falls
+  // back to the literal string 'user'.
+  test('carries roleName through as role_name so permissions can resolve', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    firestoreDouble({ userDoc: ssoUser({ roleId: 42, roleName: 'Field Technician' }) });
+
+    const { roles } = await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-name',
+      groups: [],
+    }, 'oidc');
+
+    expect(roles).toEqual([
+      { role_id: 42, role_name: 'Field Technician', permissions: [] },
+    ]);
+    // Both token-mint paths read roles[0].role_name for the `role` claim
+    expect(roles[0].role_name).not.toBe('user');
+  });
+
+  test('falls back to the role id when the document carries no roleName', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    firestoreDouble({ userDoc: ssoUser({ roleId: 15559, roleName: undefined }) });
+
+    const { roles } = await resolveUser('company-1', {
+      email: 'user@example.com',
+      oid: 'oid-noname',
+      groups: [],
+    }, 'oidc');
+
+    expect(roles).toEqual([{ role_id: 15559, role_name: 15559, permissions: [] }]);
   });
 
   test('denies a non-JIT login when the provisioned user carries no role', async () => {
