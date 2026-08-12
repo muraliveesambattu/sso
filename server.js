@@ -71,12 +71,25 @@ app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-const DEFAULT_ORIGINS = [
-  'https://zdna-sso.web.app',
-  'https://dnacloud-demo2-t.web.app',
-];
-const clientOrigins  = (process.env.CLIENT_URL || '').split(',').map(o => o.trim()).filter(Boolean);
-const allowedOrigins = new Set([...DEFAULT_ORIGINS, ...clientOrigins]);
+// Allowed browser origins come from env, not code:
+//   DEFAULT_ORIGINS — baseline origins shared across deployments
+//   CLIENT_URL      — this deployment's console origin(s)
+// Both are comma-separated; either may be empty. They are merged.
+const parseOrigins = (value) =>
+  (value || '').split(',').map(o => o.trim()).filter(Boolean);
+
+const allowedOrigins = new Set([
+  ...parseOrigins(process.env.DEFAULT_ORIGINS),
+  ...parseOrigins(process.env.CLIENT_URL),
+]);
+
+// An empty allowlist rejects every browser request with CORS_ERROR — a failure
+// that looks like a routing bug from the client side. Say so at startup.
+if (allowedOrigins.size === 0) {
+  logger.warn('CORS allowlist is empty — all browser origins will be rejected', {
+    action: 'cors_allowlist_empty',
+  });
+}
 
 // SAML callback — skip CORS entirely. Microsoft Entra POSTs the SAML assertion
 // here as a cross-origin top-level form submit (Origin: login.microsoftonline.com),

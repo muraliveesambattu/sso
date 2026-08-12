@@ -214,93 +214,107 @@ const denyNoRole = (companyId, protocol, identity, reason) => {
   }
 // User store helpers delegate to the PostgreSQL data layer (postgresSSO.service.js)
 
-// ── Main Export ───────────────────────────────────────────────────────────────
+// ── Login Modes ───────────────────────────────────────────────────────────────
+// Each mode lives in its own function so resolveUser stays a thin dispatcher.
+// Splitting them also keeps each branch's guards at the top nesting level,
+// which is what keeps cognitive complexity inside the linter's budget.
 
 /**
- * Resolves a user after successful SAML/OIDC authentication.
+ * JIT ON — auto-provision on first login, re-sync roles on every login.
  *
- * @param {string} companyId      - company_id from SSO integration
- * @param {object} claims         - raw claims from SAML attributes or OIDC id_token
- * @param {string} protocol       - 'saml' | 'oidc'
- * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
+ * @param {string} companyId
+ * @param {object} identity - normalised identity from extractIdentity
+ * @param {string} protocol - 'saml' | 'oidc' (for the denial log)
+ * @returns {{ user, roles, action }} action is 'created' | 'updated'
+ * @throws  403 NO_ROLE_ASSIGNED when nothing matched and no 'default' exists
  */
-const resolveUser = async (companyId, claims, protocol) => {
-  // Step 1: Get jit_enabled for this company
-  const integration = await getSsoIntegrationByCompanyId(companyId);
+const resolveJitUser = async (companyId, identity, protocol) => {
+  const roles = await resolveRoles(companyId, identity);
 
-  if (!integration) {
-    const err = new Error(`SSO integration not found for company: ${companyId}`);
-    err.statusCode = 404;
-    err.code = 'INTEGRATION_NOT_FOUND';
-    throw err;
+  // No mapping matched and no 'default' mapping exists. Checked BEFORE any
+  // create/update so a denied attempt leaves no orphan user row behind and
+  // does not wipe an existing user's stored roles.
+  if (roles.length === 0) {
+    denyNoRole(companyId, protocol, identity, 'no_jit_mapping_matched');
   }
 
-  // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
-  // Flag takes priority over the sso_integrations.jit_status column.
-  // This lets admins disable JIT without changing the SSO config record.
-  const jitFlag = await isEnabled(companyId, 'jit_enabled');
-  const jitEnabled = integration.jit_status === true && jitFlag;
+  let user = await findUserByOid(companyId, identity.oid);
+  let action;
 
-  if (integration.jit_status && !jitFlag) {
-    logger.info('JIT provisioning disabled by feature flag', {
-      action: 'jit_flag_blocked', company_id: companyId,
+  if (user) {
+    // Re-login — sync roles + update last_login
+    await updateUser(user.user_id || user.id, {
+      roles: roles.map(r => r.role_id),
+      display_name: identity.displayName || user.display_name,
+      last_login: new Date().toISOString(),
     });
+    action = 'updated';
+    logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
+  } else {
+    // First login — create user
+    user = await createUser({
+      user_id: crypto.randomUUID(),
+      company_id: companyId,
+      email: identity.email,
+      oid: identity.oid,
+      display_name: identity.displayName,
+      roles: roles.map(r => r.role_id),
+      login_method: 'sso',   // records that this user authenticates via SSO
+      jit_provisioned: true,
+      last_login: new Date().toISOString(),
+    });
+    action = 'created';
+    logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
   }
 
-  // Step 2: Extract normalised identity
-  const identity = extractIdentity(claims, protocol);
+  return { user, roles, action };
+};
 
-  if (!identity.oid || !identity.email) {
-    const err = new Error('Identity claims missing required fields: oid and email');
-    err.statusCode = 400;
-    err.code = 'MISSING_IDENTITY_CLAIMS';
-    throw err;
-  }
+/**
+ * Step F — stamp lastLoginTime and flip an invited user to "Joined".
+ * Best-effort: a missing document simply skips the update.
+ */
+const markUserJoined = async (companyId, user, claims) => {
+  const con=BuildCondition(user,claims)
+  const currentTime = Date.now();
+  const usersSnapshot = await admin.firestore()
+    .collection("tenants")
+    .doc(companyId)
+    .collection("users")
+    .where(con.condition, "==", con.value)
+    .get();
 
-  // ── JIT ENABLED ────────────────────────────────────────────────────────────
-  if (jitEnabled) {
-    const roles = await resolveRoles(companyId, identity);
+  if (usersSnapshot.empty) return;
 
-    // No mapping matched and no 'default' mapping exists. Checked BEFORE any
-    // create/update so a denied attempt leaves no orphan user row behind and
-    // does not wipe an existing user's stored roles.
-    if (roles.length === 0) {
-      denyNoRole(companyId, protocol, identity, 'no_jit_mapping_matched');
-    }
+  const userDoc = usersSnapshot.docs[0];
+  const userData = userDoc.data();
+  if (userData.loginMethod !== "Entra SSO") return;
 
-    let user = await findUserByOid(companyId, identity.oid);
-    let action;
+  // Update user document
+  await userDoc.ref.update({
+    status: "Joined",
+    lastLoginTime: currentTime,
+    updatedDateTime: currentTime,
+  });
+  // Update tenant document
+  await admin.firestore().collection("tenants").doc(companyId).update({
+    lastLoginTime: currentTime,
+    updatedDateTime: currentTime,
+  });
+};
 
-    if (user) {
-      // Re-login — sync roles + update last_login
-      await updateUser(user.user_id || user.id, {
-        roles: roles.map(r => r.role_id),
-        display_name: identity.displayName || user.display_name,
-        last_login: new Date().toISOString(),
-      });
-      action = 'updated';
-      logger.debug('[JIT] User updated:', identity.email, '| roles:', roles.map(r => r.role_id));
-    } else {
-      // First login — create user
-      user = await createUser({
-        user_id: crypto.randomUUID(),
-        company_id: companyId,
-        email: identity.email,
-        oid: identity.oid,
-        display_name: identity.displayName,
-        roles: roles.map(r => r.role_id),
-        login_method: 'sso',   // records that this user authenticates via SSO
-        jit_provisioned: true,
-        last_login: new Date().toISOString(),
-      });
-      action = 'created';
-      logger.debug('[JIT] User created:', identity.email, '| roles:', roles.map(r => r.role_id));
-    }
-
-    return { user, roles, action };
-  }
-
-  // ── JIT DISABLED (non-JIT) ─────────────────────────────────────────────────
+/**
+ * JIT OFF — the user must already be provisioned in Firestore under the tenant.
+ *
+ * @param {string} companyId
+ * @param {object} identity - normalised identity from extractIdentity
+ * @param {string} protocol - 'saml' | 'oidc' (for the denial log)
+ * @param {object} claims   - raw claims, used to locate the Firestore doc
+ * @returns {{ user, roles, action }} action is always 'login'
+ * @throws  403 USER_NOT_PROVISIONED | LOGIN_METHOD_NOT_ALLOWED | USER_EXPIRED |
+ *              NO_ROLE_ASSIGNED
+ */
+const resolveProvisionedUser = async (companyId, identity, protocol, claims) => {
   // Step A — Firestore lookup by email under tenant
   logger.debug('[NON-JIT] Looking up user | companyId:', companyId, '| email:', identity.email);
 
@@ -366,36 +380,61 @@ const resolveUser = async (companyId, claims, protocol) => {
   }];
 
   // Step F — Update lastLoginAt + invited → joined
-  const con=BuildCondition(user,claims)
-  const currentTime = Date.now();
-  const usersSnapshot = await admin.firestore()
-    .collection("tenants")
-    .doc(companyId)
-    .collection("users")
-    .where(con.condition, "==", con.value)
-    .get();
-  if (!usersSnapshot.empty) {
-    const userDoc = usersSnapshot.docs[0];
-    const userData = userDoc.data();
-    if (userData.loginMethod === "Entra SSO") {
-      // Update user document
-      await userDoc.ref.update({
-        status: "Joined",
-        lastLoginTime: currentTime,
-        updatedDateTime: currentTime,
-      });
-      // Update tenant document
-      await admin.firestore().collection("tenants").doc(companyId).update({
-        lastLoginTime: currentTime,
-        updatedDateTime: currentTime,
-      });
-    }
-  }
+  await markUserJoined(companyId, user, claims);
 
   logger.debug('[NON-JIT] User login success | email:', identity.email, '| loginMethod:', user.loginMethod, '| roleId:', roleId, '| roleName:', roles[0].role_name);
   user['user_id']=companyId
 
   return { user, roles, action: 'login' };
+};
+
+// ── Main Export ───────────────────────────────────────────────────────────────
+
+/**
+ * Resolves a user after successful SAML/OIDC authentication.
+ *
+ * @param {string} companyId      - company_id from SSO integration
+ * @param {object} claims         - raw claims from SAML attributes or OIDC id_token
+ * @param {string} protocol       - 'saml' | 'oidc'
+ * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
+ */
+const resolveUser = async (companyId, claims, protocol) => {
+  // Step 1: Get jit_enabled for this company
+  const integration = await getSsoIntegrationByCompanyId(companyId);
+
+  if (!integration) {
+    const err = new Error(`SSO integration not found for company: ${companyId}`);
+    err.statusCode = 404;
+    err.code = 'INTEGRATION_NOT_FOUND';
+    throw err;
+  }
+
+  // ── Feature flag: jit_enabled overrides DB setting ──────────────────────────
+  // Flag takes priority over the sso_integrations.jit_status column.
+  // This lets admins disable JIT without changing the SSO config record.
+  const jitFlag = await isEnabled(companyId, 'jit_enabled');
+  const jitEnabled = integration.jit_status === true && jitFlag;
+
+  if (integration.jit_status && !jitFlag) {
+    logger.info('JIT provisioning disabled by feature flag', {
+      action: 'jit_flag_blocked', company_id: companyId,
+    });
+  }
+
+  // Step 2: Extract normalised identity
+  const identity = extractIdentity(claims, protocol);
+
+  if (!identity.oid || !identity.email) {
+    const err = new Error('Identity claims missing required fields: oid and email');
+    err.statusCode = 400;
+    err.code = 'MISSING_IDENTITY_CLAIMS';
+    throw err;
+  }
+
+  // Step 3: Delegate to the mode this company is configured for.
+  return jitEnabled
+    ? resolveJitUser(companyId, identity, protocol)
+    : resolveProvisionedUser(companyId, identity, protocol, claims);
 };
 
 module.exports = { resolveUser };
