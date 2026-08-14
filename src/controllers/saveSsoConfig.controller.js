@@ -24,9 +24,15 @@ const handleSaveSsoConfig = async (req, res, next) => {
   try {
     const {
       protocol, idp, auth_method, client_secret,
-      certificate, certificate_password, jit_enabled, jit_mappings,
+      certificate, certificate_password, jit_mappings,
       keep_existing_cert, sign_auth,
     } = req.body;
+
+    // The console has shipped both spellings of this flag: `jit_status` (main
+    // Save & Activate) and `jit_enabled` (the inline JIT-mappings save). Accept
+    // either so a payload from any console build persists the same way.
+    // `??` rather than `||` so an explicit `false` is honoured and not skipped.
+    const jit_enabled = req.body.jit_enabled ?? req.body.jit_status;
     const domains      = toDomainArray(req.body.domains);
     const tenant_id    = trimStr(req.body.tenant_id);
     const client_id    = trimStr(req.body.client_id);

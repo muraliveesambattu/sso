@@ -64,12 +64,17 @@ describe('samlSignature.util — verifyXmlSignature', () => {
 
   test('never accepts an invalid/forged signature (throws or returns non-true)', () => {
     // Security property: a forged/invalid signature must NOT verify as true.
+    // Rejection may surface either way — a thrown error (raw parse failure or a
+    // coded SIGNATURE/INVALID error) or a non-true return — and both satisfy the
+    // property, so assert on whichever path was taken rather than swallowing it.
     let accepted = false;
     try {
       accepted = verifyXmlSignature(xmlWithFakeSig, DUMMY_CERT_B64) === true;
     } catch (e) {
-      // Any rejection (raw parse error or a coded SIGNATURE/INVALID error) is fine.
-      accepted = false;
+      // `accepted` is still false here — the assignment above never completed.
+      // Assert the rejection is a real Error, so a stray string throw or a
+      // non-Error value would fail the test instead of quietly passing.
+      expect(e).toBeInstanceOf(Error);
     }
     expect(accepted).toBe(false);
   });
