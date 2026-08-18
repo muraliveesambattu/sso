@@ -1,12 +1,7 @@
-// Registered in Entra — matched byte-for-byte.
-export const REDIRECT_URI   = `${window.location.origin}/auth/oidc/callback`;
+export const REDIRECT_URI   = process.env.REACT_APP_OIDC_REDIRECT_URI;
 export const SAML_ACS_URL   = process.env.REACT_APP_SAML_ACS_URL;
 export const SAML_ENTITY_ID = process.env.REACT_APP_SAML_ENTITY_ID;
 
-// Same-origin. Keep separate: API_BASE_GATEWAY → ssoGateway (Bearer token),
-// API_BASE → sso service directly (no token).
-// `?? ''` so a missing env var falls back to same-origin rather than compiling
-// to the literal string "undefined/auth/sso/save".
 export const API_BASE       = '';
 export const API_BASE_GATEWAY = process.env.REACT_APP_SSO_API_BASE_GATEWAY ?? '';
 
