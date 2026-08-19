@@ -101,6 +101,9 @@ app.get('/gateway/health', (req, res) => {
     return res.status(200).json({ success: true, service: 'sso-gateway' })
 })
 
+// Preflight carries no Authorization header — must not reach the auth check.
+app.options('*', (req, res) => res.status(204).end())
+
 app.all('*', async (req, res) => {
     // 1. Route allowlist — anything not on the admin surface is not served here.
     //    Resolving up front also yields the exact URL we will request in step 3.
