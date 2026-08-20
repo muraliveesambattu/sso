@@ -25,6 +25,25 @@ SSO_BASE_URL        = https://sso-323173671147.us-central1.run.app   # emc SSO s
 SSO_ADMIN_API_KEY   = <the SSO service's ADMIN_API_KEY>              # store like other secrets (encrypt/placeholder)
 ```
 
+### Generating `SSO_ADMIN_API_KEY`
+
+The SSO service and this gateway share one key — a mismatch fails every call
+with `403 INVALID_API_KEY`.
+
+```bash
+# 1. create + store (printf, not echo — a trailing newline breaks the compare)
+gcloud secrets create ADMIN_API_KEY --replication-policy=automatic --project=<sso-project>
+printf '%s' "zdna_$(openssl rand -hex 32)" | \
+  gcloud secrets versions add ADMIN_API_KEY --data-file=- --project=<sso-project>
+
+# 2. read it back for this gateway's SSO_ADMIN_API_KEY
+gcloud secrets versions access 1 --secret=ADMIN_API_KEY --project=<sso-project>
+```
+
+Bind it to the SSO service in the Cloud Run console (Variables & Secrets),
+pinning the explicit version, not `latest`. Never expose the value to the
+browser.
+
 ## 4. Deploy via Gerrit → Jenkins (NOT manual firebase deploy)
 This is the shared monolith; deploys go through the normal pipeline
 (`jenkindeployment-demo`).
