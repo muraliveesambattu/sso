@@ -51,7 +51,7 @@ IF NOT EXIST firebase.json.template (
     ECHO firebase.json.template not found - see mdna-console/README.md for how to create it.
     GOTO Error
 )
-powershell -NoProfile -Command "(Get-Content firebase.json.template -Raw) -replace '\$\{REGION\}','%REGION%' -replace '\$\{SSO_SERVICE\}','%SSO_SERVICE%' -replace '\$\{GATEWAY_FUNCTION\}','%GATEWAY_FUNCTION%' | Set-Content firebase.json -NoNewline"
+powershell -NoProfile -Command "$c=(Get-Content firebase.json.template -Raw); $c=$c.Replace('${REGION}','%REGION%'); $c=$c.Replace('${SSO_SERVICE}','%SSO_SERVICE%'); $c=$c.Replace('${GATEWAY_FUNCTION}','%GATEWAY_FUNCTION%'); Set-Content firebase.json -Value $c -NoNewline"
 if errorlevel 1 GOTO Error
 
 powershell -NoProfile -Command "try { Get-Content firebase.json -Raw | ConvertFrom-Json > $null } catch { exit 1 }"

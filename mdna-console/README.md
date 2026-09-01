@@ -29,15 +29,24 @@ block contains a long `Feature-Policy` value that must not be retyped.
 
 From `MDNA-Console/`:
 
-```bat
+```powershell
 copy firebase.json firebase.json.template
-powershell -NoProfile -Command "(Get-Content firebase.json.template -Raw) -replace '\"us-central1\"','\"${REGION}\"' -replace '\"serviceId\": \"sso\"','\"serviceId\": \"${SSO_SERVICE}\"' -replace '\"functionId\": \"ssoGateway\"','\"functionId\": \"${GATEWAY_FUNCTION}\"' | Set-Content firebase.json.template -NoNewline"
+
+$t = Get-Content firebase.json.template -Raw
+$t = $t.Replace('"us-central1"', '"${REGION}"')
+$t = $t.Replace('"serviceId": "sso"', '"serviceId": "${SSO_SERVICE}"')
+$t = $t.Replace('"functionId": "ssoGateway"', '"functionId": "${GATEWAY_FUNCTION}"')
+Set-Content firebase.json.template -Value $t -NoNewline
 ```
+
+Run this in PowerShell, not `cmd`. `.Replace()` is used rather than `-replace`
+deliberately: `-replace` treats the pattern as a regex and expands `$` in the
+replacement as a capture-group reference, so `${REGION}` would not survive.
 
 Verify only the intended lines changed:
 
-```bat
-fc firebase.json firebase.json.template
+```powershell
+Compare-Object (Get-Content firebase.json) (Get-Content firebase.json.template)
 ```
 
 Expect 7 `${REGION}`, 4 `${SSO_SERVICE}`, 3 `${GATEWAY_FUNCTION}` — nothing else.
