@@ -2,6 +2,7 @@ node_modules/
 .env
 .env.production
 .env.dnacloud-demo2-t
+.env.emc-mdnacloud-demo-t
 dist/
 build/
 coverage/
@@ -44,9 +45,7 @@ TEST_ACCOUNT.txt
 TEST_PLAN.md
 gen-scope-doc.js
 cloudbuild.yaml
-Dockerfile
 docker-compose.yml
-.dockerignore
 CLAUDE.md
 AGENTS.md
 .DS_Store

@@ -6,6 +6,13 @@ if /I "%c%" EQU "Y" goto :CONTINUE
 if /I "%c%" EQU "N" goto :Error
 :CONTINUE
 
+:: ── SSO feature flag ─────────────────────────────────────────────────────────
+:: SSO rewrites are included only when --sso is passed:
+::     Deployment.bat <project-id> --sso
+:: Without it the console deploys with SPA routing only and no /auth/** routes.
+set "SSO_ENABLED=false"
+if /I "%2"=="--sso" set "SSO_ENABLED=true"
+
 :: ── Per-environment configuration ────────────────────────────────────────────
 :: Region and Cloud Run service names differ per deployment target. Adding a new
 :: target means adding one block here; nothing else in this file changes.
@@ -21,7 +28,7 @@ if /I "%1"=="dnacloud-demo2-t" (
     ECHO Unknown project-ID "%1" - no environment configuration defined in Deployment.bat.
     GOTO Error
 )
-ECHO Target: %1 ^| region: %REGION% ^| SSO service: %SSO_SERVICE%
+ECHO Target: %1 ^| region: %REGION% ^| SSO service: %SSO_SERVICE% ^| SSO rewrites: %SSO_ENABLED%
 
 ECHO "*********************************** Installing Firebase CLI ***********************************"
 SET mypath=%cd%
@@ -48,10 +55,16 @@ cd %mypath%
 :: Hosting rewrites and the Cloud Run deployment cannot drift apart.
 ECHO "*********************************** Generating firebase.json ***********************************"
 IF NOT EXIST firebase.json.template (
-    ECHO firebase.json.template not found - see mdna-console/README.md for how to create it.
+    ECHO firebase.json.template not found - generate it from firebase.json (see deployment guide).
     GOTO Error
 )
-powershell -NoProfile -Command "$c=(Get-Content firebase.json.template -Raw); $c=$c.Replace('${REGION}','%REGION%'); $c=$c.Replace('${SSO_SERVICE}','%SSO_SERVICE%'); $c=$c.Replace('${GATEWAY_FUNCTION}','%GATEWAY_FUNCTION%'); Set-Content firebase.json -Value $c -NoNewline"
+if /I "%SSO_ENABLED%"=="true" (
+    IF NOT EXIST rewrites.sso.template (
+        ECHO rewrites.sso.template not found - required when --sso is passed.
+        GOTO Error
+    )
+)
+powershell -NoProfile -Command "$c=(Get-Content firebase.json.template -Raw); if ('%SSO_ENABLED%' -eq 'true') { $sso=(Get-Content rewrites.sso.template -Raw) } else { $sso='' }; $c=$c.Replace('__SSO_REWRITES__',$sso); $c=$c.Replace('${REGION}','%REGION%'); $c=$c.Replace('${SSO_SERVICE}','%SSO_SERVICE%'); $c=$c.Replace('${GATEWAY_FUNCTION}','%GATEWAY_FUNCTION%'); Set-Content firebase.json -Value $c -NoNewline"
 if errorlevel 1 GOTO Error
 
 powershell -NoProfile -Command "try { Get-Content firebase.json -Raw | ConvertFrom-Json > $null } catch { exit 1 }"
@@ -59,7 +72,7 @@ if errorlevel 1 (
     ECHO Generated firebase.json is not valid JSON - aborting before deploy.
     GOTO Error
 )
-ECHO firebase.json generated for %1 ^(%REGION%^)
+ECHO firebase.json generated for %1 ^(%REGION%^) ^| SSO rewrites: %SSO_ENABLED%
 
 ECHO "*********************************** Deploying the KR console ***********************************"
 call npm install

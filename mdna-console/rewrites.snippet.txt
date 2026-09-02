@@ -1,0 +1,7 @@
+    "rewrites": [
+__SSO_REWRITES__
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],

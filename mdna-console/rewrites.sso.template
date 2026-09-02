@@ -1,0 +1,49 @@
+      {
+        "source": "/auth/sso/**",
+        "function": {
+          "functionId": "${GATEWAY_FUNCTION}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/test-connection",
+        "function": {
+          "functionId": "${GATEWAY_FUNCTION}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/admin/flags/**",
+        "function": {
+          "functionId": "${GATEWAY_FUNCTION}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/domain-check",
+        "run": {
+          "serviceId": "${SSO_SERVICE}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/test-connection/oidc/callback",
+        "run": {
+          "serviceId": "${SSO_SERVICE}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/oidc/token-exchange",
+        "run": {
+          "serviceId": "${SSO_SERVICE}",
+          "region": "${REGION}"
+        }
+      },
+      {
+        "source": "/auth/callback",
+        "run": {
+          "serviceId": "${SSO_SERVICE}",
+          "region": "${REGION}"
+        }
+      },
