@@ -55,7 +55,7 @@ cd %mypath%
 :: Hosting rewrites and the Cloud Run deployment cannot drift apart.
 ECHO "*********************************** Generating firebase.json ***********************************"
 IF NOT EXIST firebase.json.template (
-    ECHO firebase.json.template not found - generate it from firebase.json (see deployment guide).
+    ECHO firebase.json.template not found - generate it from firebase.json first.
     GOTO Error
 )
 if /I "%SSO_ENABLED%"=="true" (
