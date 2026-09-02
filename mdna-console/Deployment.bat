@@ -6,14 +6,14 @@ if /I "%c%" EQU "Y" goto :CONTINUE
 if /I "%c%" EQU "N" goto :Error
 :CONTINUE
 
-:: ── SSO feature flag ─────────────────────────────────────────────────────────
+:: -- SSO feature flag ---------------------------------------------------------
 :: SSO rewrites are included only when --sso is passed:
 ::     Deployment.bat <project-id> --sso
 :: Without it the console deploys with SPA routing only and no /auth/** routes.
 set "SSO_ENABLED=false"
 if /I "%2"=="--sso" set "SSO_ENABLED=true"
 
-:: ── Per-environment configuration ────────────────────────────────────────────
+:: -- Per-environment configuration --------------------------------------------
 :: Region and Cloud Run service names differ per deployment target. Adding a new
 :: target means adding one block here; nothing else in this file changes.
 if /I "%1"=="dnacloud-demo2-t" (
@@ -49,7 +49,7 @@ call npm install
 
 cd %mypath%
 
-:: ── Generate firebase.json from template ─────────────────────────────────────
+:: -- Generate firebase.json from template -------------------------------------
 :: firebase.json is a build artifact (gitignored); firebase.json.template is the
 :: tracked source. Region and service name come from the block above, so the
 :: Hosting rewrites and the Cloud Run deployment cannot drift apart.
