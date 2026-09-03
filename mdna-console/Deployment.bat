@@ -7,11 +7,20 @@ if /I "%c%" EQU "N" goto :Error
 :CONTINUE
 
 :: -- SSO feature flag ---------------------------------------------------------
-:: SSO rewrites are included only when --sso is passed:
-::     Deployment.bat <project-id> --sso
+:: SSO rewrites are included only when the flag is passed:
+::     Deployment.bat <project-id> sso_enabled
 :: Without it the console deploys with SPA routing only and no /auth/** routes.
+:: An unrecognised second argument aborts, so a typo cannot silently drop
+:: the SSO routes from the deployment.
 set "SSO_ENABLED=false"
-if /I "%2"=="--sso" set "SSO_ENABLED=true"
+if "%2"=="" goto :FLAGDONE
+if /I "%2"=="sso_enabled" goto :FLAGON
+if /I "%2"=="--sso" goto :FLAGON
+ECHO Unknown option "%2" - expected sso_enabled
+GOTO Error
+:FLAGON
+set "SSO_ENABLED=true"
+:FLAGDONE
 
 :: -- Per-environment configuration --------------------------------------------
 :: Region and Cloud Run service names differ per deployment target. Adding a new
