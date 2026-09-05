@@ -23,20 +23,53 @@ set "SSO_ENABLED=true"
 :FLAGDONE
 
 :: -- Per-environment configuration --------------------------------------------
-:: Region and Cloud Run service names differ per deployment target. Adding a new
+:: Service names and the expected region per deployment target. Adding a new
 :: target means adding one block here; nothing else in this file changes.
 if /I "%1"=="dnacloud-demo2-t" (
-    set "REGION=us-central1"
+    set "DEFAULT_REGION=us-central1"
     set "SSO_SERVICE=sso-container"
     set "GATEWAY_FUNCTION=ssoGateway"
 ) else if /I "%1"=="gms-dnacloud-eu-p" (
-    set "REGION=europe-west1"
+    set "DEFAULT_REGION=europe-west1"
     set "SSO_SERVICE=sso-container"
     set "GATEWAY_FUNCTION=ssoGateway"
 ) else (
     ECHO Unknown project-ID "%1" - no environment configuration defined in Deployment.bat.
     GOTO Error
 )
+
+:: -- Region selection ---------------------------------------------------------
+:: The region goes into the Hosting rewrites, so it must be the region the
+:: Cloud Run service actually runs in. The default below is the one recorded
+:: for this project; choosing the other is possible but only correct if the
+:: service has been deployed there.
+:REGIONCHOICE
+ECHO.
+ECHO Select the Cloud Run region for %1:
+ECHO   1^) us-central1
+ECHO   2^) europe-west1
+ECHO   Enter = keep default ^(%DEFAULT_REGION%^)
+set "r="
+set /P r=Region [1/2/Enter]?
+if "%r%"=="" set "REGION=%DEFAULT_REGION%" & goto :REGIONDONE
+if "%r%"=="1" set "REGION=us-central1" & goto :REGIONDONE
+if "%r%"=="2" set "REGION=europe-west1" & goto :REGIONDONE
+ECHO Invalid choice "%r%" - enter 1, 2, or press Enter.
+goto :REGIONCHOICE
+:REGIONDONE
+
+:: Flat, not a parenthesised block: %k% inside a block would be expanded when
+:: the block is parsed, before set /P runs, so the answer would always be empty.
+if /I "%REGION%"=="%DEFAULT_REGION%" goto :REGIONOK
+ECHO.
+ECHO WARNING: %1 is recorded as %DEFAULT_REGION% but you selected %REGION%.
+ECHO The Hosting rewrites will point at %SSO_SERVICE% in %REGION%. If the
+ECHO service is not deployed there, every /auth/** route will 404.
+set "k="
+set /P k=Continue anyway [Y/N]?
+if /I not "%k%"=="Y" GOTO Error
+:REGIONOK
+
 ECHO Target: %1 ^| region: %REGION% ^| SSO service: %SSO_SERVICE% ^| SSO rewrites: %SSO_ENABLED%
 
 ECHO "*********************************** Installing Firebase CLI ***********************************"
