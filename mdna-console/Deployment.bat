@@ -23,16 +23,18 @@ set "SSO_ENABLED=true"
 :FLAGDONE
 
 :: -- Per-environment configuration --------------------------------------------
-:: Service names and the expected region per deployment target. Adding a new
-:: target means adding one block here; nothing else in this file changes.
+:: Service and function names are the same in every environment, so they are
+:: set once here rather than repeated per project.
+set "SSO_SERVICE=sso-container"
+set "GATEWAY_FUNCTION=ssoGateway"
+
+:: Only the default region varies. The check also rejects an unknown or
+:: mistyped project-ID, so a deploy cannot proceed with a guessed region.
+:: Adding a target means adding one line here.
 if /I "%1"=="dnacloud-demo2-t" (
     set "DEFAULT_REGION=us-central1"
-    set "SSO_SERVICE=sso-container"
-    set "GATEWAY_FUNCTION=ssoGateway"
 ) else if /I "%1"=="gms-dnacloud-eu-p" (
     set "DEFAULT_REGION=europe-west1"
-    set "SSO_SERVICE=sso-container"
-    set "GATEWAY_FUNCTION=ssoGateway"
 ) else (
     ECHO Unknown project-ID "%1" - no environment configuration defined in Deployment.bat.
     GOTO Error

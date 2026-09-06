@@ -104,50 +104,6 @@ The assembled rewrite table:
 > service**. If they diverge, a login flow starts on one service and completes on
 > another; the in-process session store then fails with `TC_STORE_EXPIRED`.
 
-### Creating the template (one-time)
-
-Generate it from the real file rather than hand-writing it — the `headers` block
-contains a long `Feature-Policy` value that must not be retyped. In PowerShell:
-
-```powershell
-copy firebase.json firebase.json.template
-
-$t = Get-Content firebase.json.template -Raw
-$t = $t.Replace('"us-central1"', '"${REGION}"')
-$t = $t.Replace('"serviceId": "sso-container"', '"serviceId": "${SSO_SERVICE}"')
-$t = $t.Replace('"functionId": "ssoGateway"', '"functionId": "${GATEWAY_FUNCTION}"')
-Set-Content firebase.json.template -Value $t -NoNewline
-```
-
-`.Replace()` rather than `-replace`: the latter treats the pattern as a regex and
-expands `$` in the replacement as a capture-group reference, so `${REGION}`
-would not survive.
-
-Then replace the `"rewrites": [ ... ],` block in the template with:
-
-```
-    "rewrites": [
-__SSO_REWRITES__
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ],
-```
-
-and move the 7 SSO entries into `rewrites.sso.template`, each ending with a
-comma.
-
-Finally, stop tracking the generated file:
-
-```powershell
-git rm --cached -f firebase.json
-Add-Content .gitignore "firebase.json"
-```
-
-`Add-Content`, not `>>` — PowerShell 5.1's `>>` writes UTF-16 and corrupts a
-UTF-8 `.gitignore`.
-
 ## 1.4 Deploying the Console
 
 ```
@@ -166,8 +122,9 @@ Deployment.bat <GCP_PROJECT_ID> [sso_enabled]
 1. Confirms the project-ID interactively
 2. Parses the SSO flag. An unrecognised second argument **aborts**, so a typo
    cannot silently deploy without the SSO routes
-3. Resolves `REGION`, `SSO_SERVICE`, `GATEWAY_FUNCTION` from a per-project block.
-   Adding an environment means adding one block; nothing else in the file changes
+3. Resolves `DEFAULT_REGION` from the project-ID, then prompts for the region
+   (Enter keeps the default). Choosing a non-default region warns and asks for
+   confirmation, since the region goes straight into the rewrites
 4. Installs the Firebase CLI, logs out and back in, selects the project
 5. Generates `firebase.json` from the template, injecting `rewrites.sso.template`
    only if the flag was passed
@@ -176,23 +133,12 @@ Deployment.bat <GCP_PROJECT_ID> [sso_enabled]
 
 ### Adding a new environment
 
+One line in the project-ID check. `SSO_SERVICE` and `GATEWAY_FUNCTION` are set
+once above it and do not vary by environment.
+
 ```bat
 ) else if /I "%1"=="<project-id>" (
-    set "REGION=<region>"
-    set "SSO_SERVICE=<cloud-run-service>"
-    set "GATEWAY_FUNCTION=ssoGateway"
-```
-
-### Local development
-
-`firebase serve` and the emulators need `firebase.json` present. Generate it
-once:
-
-```powershell
-$c = Get-Content firebase.json.template -Raw
-$c = $c.Replace('__SSO_REWRITES__', (Get-Content rewrites.sso.template -Raw))
-$c = $c.Replace('${REGION}','us-central1').Replace('${SSO_SERVICE}','sso-container').Replace('${GATEWAY_FUNCTION}','ssoGateway')
-Set-Content firebase.json -Value $c -NoNewline
+    set "DEFAULT_REGION=<region>"
 ```
 
 ## 1.5 Console verification
@@ -603,9 +549,7 @@ the previous stable version.
 
 - [ ] Three system flags and three tenant flags created
 - [ ] `.env` values set, all URLs derived from one base URL
-- [ ] `firebase.json.template` and `rewrites.sso.template` present;
-      `firebase.json` gitignored
-- [ ] Per-project block added to `Deployment.bat`
+- [ ] Project-ID line added to `Deployment.bat`
 - [ ] `Deployment.bat <project> sso_enabled` completes
 - [ ] Gateway `SSO_BASE_URL` names the same service as the rewrites
 
