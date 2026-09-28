@@ -22,9 +22,8 @@ Belongs in: MDNA-Server/CloudFunctions/functions/api/ssoGateway.js
 const { onRequest } = require('firebase-functions/v2/https')
 const axios = require('axios')
 const { log } = require('firebase-functions/logger')
-const { createExpressApp } = require('../util/commonUtil')
-const { isAuthenticatedHSTS } = require('../service/validatorService')
-const { STATUS } = require('../util/constant')   // isAuthenticatedHSTS returns { status: STATUS.SUCCESS | STATUS.ERROR }
+const { expressApp } = require('../util/additionalCommonUtil')
+const { MIDDLEWARES } = require('../util/constant')
 
 // Both values come from env/application.properties.js (per environment).
 // SSO_BASE_URL e.g. https://sso-323173671147.us-central1.run.app
@@ -92,11 +91,16 @@ const resolveProxyPath = (originalUrl) => {
     }
 }
 
-const app = createExpressApp('ssoGatewayApp')
+// Shared CF wrapper: baseline stack (hsts, cors, responseCookie, json) plus the
+// standard authentication and permission middlewares, so this function is
+// gated the same way as every other console-facing function.
+const app = expressApp('ssoGateway', [
+    MIDDLEWARES.AUTHENTICATE_HSTS,
+    MIDDLEWARES.PERMISSION_CHECK_HSTS,
+])
 
-// Lightweight liveness probe — no auth, no proxying. Lets smoke tests and
-// monitoring verify the gateway is up (and that req.path is unprefixed) without
-// needing a token.
+// Liveness probe — no proxying. Now behind the app-level middlewares, so it
+// requires a valid token like every other route.
 app.get('/gateway/health', (req, res) => {
     return res.status(200).json({ success: true, service: 'sso-gateway' })
 })
@@ -106,26 +110,17 @@ app.options('*', (req, res) => res.status(204).end())
 
 app.all('*', async (req, res) => {
     // 1. Route allowlist — anything not on the admin surface is not served here.
-    //    Resolving up front also yields the exact URL we will request in step 3.
+    //    Resolving up front also yields the exact URL we will request in step 2.
     const proxyPath = resolveProxyPath(req.originalUrl)
     if (!proxyPath) {
         log('INFO', 'Inside ssoGateway, unknown route rejected: ' + req.path)
         return res.status(404).json({ success: false, error: { code: 'UNKNOWN_ROUTE' } })
     }
 
-    // 2. Caller must be a signed-in console user (Firebase ID token).
-    //    NOTE: isAuthenticatedHSTS ALWAYS resolves — it never throws — returning
-    //    { status: STATUS.SUCCESS } on a valid token or { status: STATUS.ERROR }
-    //    otherwise. So we must test the status explicitly; a truthy object is NOT
-    //    proof of authentication. Without this the admin key would be attached
-    //    for anonymous callers.
-    const authResult = await isAuthenticatedHSTS(req.headers.authorization)
-    if (!authResult || authResult.status !== STATUS.SUCCESS) {
-        log('ERROR', 'Inside ssoGateway, caller not authenticated')
-        return res.status(401).json({ success: false, error: { code: 'UNAUTHENTICATED' } })
-    }
-
-    // 3. Proxy to the SSO microservice with the admin key attached.
+    // 2. Proxy to the SSO microservice with the admin key attached.
+    //    Authentication and permission checks already ran in the app-level
+    //    middlewares, so a request reaching here is from a signed-in console
+    //    user who holds the required permission.
     //    The target URL is BUILT here, from the constant SSO_BASE plus the
     //    already-allowlisted path, and its scheme + host are checked against the
     //    pre-approved lists immediately before the request — which is made only
@@ -142,10 +137,9 @@ app.all('*', async (req, res) => {
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Admin-API-Key': SSO_ADMIN_API_KEY,
-                    // isAuthenticatedHSTS does not return the decoded identity, so we
-                    // can't forward the user's email here. Use isAuthenticatedHSTSCheck
-                    // (with a userId) if per-user audit attribution is needed later.
-                    'X-Forwarded-User': 'console-user'
+                    // permissionCheckHSTS leaves { email } on req.context, so the
+                    // microservice's audit log can attribute the call to a user.
+                    'X-Forwarded-User': req.context?.email || 'console-user'
                 },
                 data: ['GET', 'HEAD', 'DELETE'].includes(req.method) ? undefined : req.body,
                 timeout: 30000,
