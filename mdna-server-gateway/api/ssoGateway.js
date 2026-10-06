@@ -1,38 +1,22 @@
 /*
-+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-SSO Gateway
-Single point of communication between MDNA Console and the SSO Microservice
-for all ADMIN operations (config CRUD, test-connection, feature flags).
-
-- Verifies the console user's Firebase ID token (same check as other
-  console-facing functions), then forwards the request to the SSO
-  microservice with the X-Admin-API-Key attached server-side. The admin
-  key never reaches the browser.
-
-- Login/browser-flow endpoints (/auth/domain-check, /auth/oidc/callback,
-  /auth/oidc/token-exchange, /auth/callback [SAML ACS],
-  /auth/test-connection/oidc/callback) are NOT routed here by design:
-  their callers are either not-yet-authenticated users mid-login or
-  Microsoft Entra itself, so they call the SSO service directly and are
-  protected by rate limits, state/nonce and SAML signature validation.
+SSO Gateway — single point of communication between MDNA Console and the SSO
+Microservice for ADMIN operations (config CRUD, test-connection, feature flags).
+Forwards with X-Admin-API-Key attached server-side; the key never reaches the
+browser. company_id comes from the verified token, never from the client.
+Login/browser-flow endpoints are NOT routed here by design — their callers are
+unauthenticated users mid-login or Entra itself.
 
 Belongs in: MDNA-Server/CloudFunctions/functions/api/ssoGateway.js
-+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 */
 const { onRequest } = require('firebase-functions/v2/https')
 const axios = require('axios')
 const { log } = require('firebase-functions/logger')
 const { expressApp } = require('../util/additionalCommonUtil')
-const { MIDDLEWARES } = require('../util/constant')
+const { MIDDLEWARES, ROLE } = require('../util/constant')
 
-// Both values come from env/application.properties.js (per environment).
-// SSO_BASE_URL e.g. https://sso-323173671147.us-central1.run.app
 const SSO_BASE_URL = process.env.SSO_BASE_URL
 const SSO_ADMIN_API_KEY = process.env.SSO_ADMIN_API_KEY
 
-// Parsed once at cold start rather than on every request. If SSO_BASE_URL is
-// missing or malformed, SSO_BASE stays null, SSO_ALLOWED_HOSTS is empty, and
-// every proxy attempt fails closed on the host check below.
 const parseBaseUrl = (raw) => {
     try {
         return new URL(raw)
@@ -43,42 +27,28 @@ const parseBaseUrl = (raw) => {
 }
 const SSO_BASE = parseBaseUrl(SSO_BASE_URL)
 
-// Pre-approved scheme + host for the proxy target — the CWE-918 allowlist that
-// the request site checks immediately before calling axios.
-const SSO_ALLOWED_SCHEMES = ['https:']
+// CWE-918 allowlist — checked immediately before calling axios.
+const SSO_ALLOWED_SCHEMES = new Set(['https:'])
 const SSO_ALLOWED_HOSTS = SSO_BASE ? [SSO_BASE.hostname] : []
 
 // Admin surface of the SSO microservice — the ONLY routes this gateway serves.
-// Covers both the /auth and /v1/auth mounts of the microservice router.
 const ALLOWED_PREFIXES = [
-    '/auth/sso',              // POST /sso/save, GET /sso/config,
-    '/v1/auth/sso',           // PATCH /sso/config/:id/status, DELETE /sso/config/:id
-    '/auth/test-connection',  // POST — admin "Test Connection" trigger
+    '/auth/sso',
+    '/v1/auth/sso',
+    '/auth/test-connection',
     '/v1/auth/test-connection',
-    '/auth/admin/flags',      // GET /admin/flags/:company_id, POST /admin/flags
+    '/auth/admin/flags',
     '/v1/auth/admin/flags'
 ]
 
-// The test-connection OIDC callback is public (Entra redirect target) and
-// must not be reachable through the authenticated gateway.
+// Public Entra redirect target — must not be reachable through the gateway.
 const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-connection/oidc/callback']
 
-// Resolves the proxy target against the fixed SSO base.
-//
-// Using the WHATWG URL parser instead of string concatenation is what makes the
-// forwarding safe: an absolute or protocol-relative originalUrl (e.g.
-// "//evil.example/x") resolves to a DIFFERENT origin, which the check below
-// rejects, and "../" traversal is normalised before the prefix allowlist sees
-// it. Crucially the allowlist is applied to the RESOLVED pathname, so the value
-// that gets validated is exactly the value that gets requested — the previous
-// code validated req.path but proxied req.originalUrl.
-//
-// Returns the normalised "pathname + query" to proxy, or null when the request
-// must not be forwarded. Returning a PATH (not a URL) keeps the target's origin
-// entirely in the caller's hands — it rebuilds the URL from SSO_BASE itself, so
-// no host or scheme can travel out of this function.
+// Resolves the proxy target against the fixed SSO base. The WHATWG parser
+// normalises traversal and rejects a different origin, and the allowlist is
+// applied to the RESOLVED pathname — so what is validated is what is requested.
 const resolveProxyPath = (originalUrl) => {
-    if (!SSO_BASE) return null            // misconfigured environment — fail closed
+    if (!SSO_BASE) return null
     try {
         const candidate = new URL(originalUrl, SSO_BASE)
         if (candidate.origin !== SSO_BASE.origin) return null
@@ -91,59 +61,95 @@ const resolveProxyPath = (originalUrl) => {
     }
 }
 
-// Shared CF wrapper: baseline stack (hsts, cors, responseCookie, json) plus the
-// standard authentication and permission middlewares, so this function is
-// gated the same way as every other console-facing function.
+// Tenant of the caller, from the claims authenticateHSTS leaves on req.context.
+const resolveTenantId = (context = {}) =>
+    context.tenantId || (context.role === ROLE.TENANT_OWNER ? context.identity : context.uid)
+
+// Segments followed by the tenant: /sso/config/:company_id[/status],
+// /admin/flags/:company_id. Overwritten so a client value cannot address
+// another tenant; routes with nothing after the parent are untouched.
+const TENANT_SEGMENT_PARENTS = new Set(['config', 'flags'])
+
+// What the client asked for, before it is overwritten — logged so a mismatch
+// with the token is visible during rollout.
+const clientTenantFrom = (url, body = {}) => {
+    const fromQuery = url.searchParams.get('company_id')
+    if (fromQuery) return { value: fromQuery, source: 'query' }
+    const parts = url.pathname.split('/')
+    for (let i = 0; i < parts.length - 1; i++) {
+        if (TENANT_SEGMENT_PARENTS.has(parts[i]) && parts[i + 1]) {
+            return { value: decodeURIComponent(parts[i + 1]), source: 'path' }
+        }
+    }
+    if (body.company_id) return { value: body.company_id, source: 'body' }
+    return null
+}
+
+const applyTenant = (url, tenantId) => {
+    if (url.searchParams.has('company_id')) url.searchParams.set('company_id', tenantId)
+    const parts = url.pathname.split('/')
+    for (let i = 0; i < parts.length - 1; i++) {
+        if (TENANT_SEGMENT_PARENTS.has(parts[i]) && parts[i + 1]) {
+            parts[i + 1] = encodeURIComponent(tenantId)
+        }
+    }
+    url.pathname = parts.join('/')
+    return url
+}
+
 const app = expressApp('ssoGateway', [
-    MIDDLEWARES.AUTHENTICATE_HSTS,
-    MIDDLEWARES.PERMISSION_CHECK_HSTS,
+    MIDDLEWARES.AUTH_HSTS,
 ])
 
-// Liveness probe — no proxying. Now behind the app-level middlewares, so it
-// requires a valid token like every other route.
+// Liveness probe. Behind the app-level middleware, so it needs a valid token.
 app.get('/gateway/health', (req, res) => {
     return res.status(200).json({ success: true, service: 'sso-gateway' })
 })
 
-// Preflight carries no Authorization header — must not reach the auth check.
+// Preflight carries no Authorization header.
 app.options('*', (req, res) => res.status(204).end())
 
 app.all('*', async (req, res) => {
-    // 1. Route allowlist — anything not on the admin surface is not served here.
-    //    Resolving up front also yields the exact URL we will request in step 2.
     const proxyPath = resolveProxyPath(req.originalUrl)
     if (!proxyPath) {
         log('INFO', 'Inside ssoGateway, unknown route rejected: ' + req.path)
         return res.status(404).json({ success: false, error: { code: 'UNKNOWN_ROUTE' } })
     }
 
-    // 2. Proxy to the SSO microservice with the admin key attached.
-    //    Authentication and permission checks already ran in the app-level
-    //    middlewares, so a request reaching here is from a signed-in console
-    //    user who holds the required permission.
-    //    The target URL is BUILT here, from the constant SSO_BASE plus the
-    //    already-allowlisted path, and its scheme + host are checked against the
-    //    pre-approved lists immediately before the request — which is made only
-    //    inside that branch. Construction, validation and use all sit in this one
-    //    scope so the guarantee is verifiable without following a helper
-    //    (CWE-918 / S5144).
-    const url = new URL(proxyPath, SSO_BASE)
+    const tenantId = resolveTenantId(req.context)
+    if (!tenantId) {
+        log('ERROR', 'Inside ssoGateway, no tenant on the verified token')
+        return res.status(401).json({ success: false, error: { code: 'TENANT_UNRESOLVED' } })
+    }
 
-    if (SSO_ALLOWED_SCHEMES.includes(url.protocol) && SSO_ALLOWED_HOSTS.includes(url.hostname)) {
+    const target = new URL(proxyPath, SSO_BASE)
+    const claimed = clientTenantFrom(target, req.body)
+    if (!claimed) {
+        log('INFO', 'Inside ssoGateway, no client company_id | token: ' + tenantId + ' | ' + req.method + ' ' + req.path)
+    } else if (claimed.value === tenantId) {
+        log('INFO', 'Inside ssoGateway, company_id matches token | ' + claimed.source + ': ' + claimed.value)
+    } else {
+        log('WARN', 'Inside ssoGateway, company_id MISMATCH — overriding with token | ' +
+            claimed.source + ': ' + claimed.value + ' | token: ' + tenantId + ' | ' + req.method + ' ' + req.path)
+    }
+
+    const url = applyTenant(target, tenantId)
+    const isBodyless = ['GET', 'HEAD', 'DELETE'].includes(req.method)
+    const data = isBodyless ? undefined : { ...req.body, company_id: tenantId }
+
+    if (SSO_ALLOWED_SCHEMES.has(url.protocol) && SSO_ALLOWED_HOSTS.includes(url.hostname)) {
         try {
             const response = await axios({
                 method: req.method,
-                url: url.toString(),   // fixed origin + allowlisted path, query preserved
+                url: url.toString(),
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Admin-API-Key': SSO_ADMIN_API_KEY,
-                    // permissionCheckHSTS leaves { email } on req.context, so the
-                    // microservice's audit log can attribute the call to a user.
                     'X-Forwarded-User': req.context?.email || 'console-user'
                 },
-                data: ['GET', 'HEAD', 'DELETE'].includes(req.method) ? undefined : req.body,
+                data,
                 timeout: 30000,
-                validateStatus: () => true   // relay SSO service statuses (4xx/5xx) as-is
+                validateStatus: () => true   // relay SSO service statuses as-is
             })
             log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + req.path + ' -> ' + response.status)
             return res.status(response.status).json(response.data)
