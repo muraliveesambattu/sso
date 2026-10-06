@@ -70,21 +70,6 @@ const resolveTenantId = (context = {}) =>
 // another tenant; routes with nothing after the parent are untouched.
 const TENANT_SEGMENT_PARENTS = new Set(['config', 'flags'])
 
-// What the client asked for, before it is overwritten — logged so a mismatch
-// with the token is visible during rollout.
-const clientTenantFrom = (url, body = {}) => {
-    const fromQuery = url.searchParams.get('company_id')
-    if (fromQuery) return { value: fromQuery, source: 'query' }
-    const parts = url.pathname.split('/')
-    for (let i = 0; i < parts.length - 1; i++) {
-        if (TENANT_SEGMENT_PARENTS.has(parts[i]) && parts[i + 1]) {
-            return { value: decodeURIComponent(parts[i + 1]), source: 'path' }
-        }
-    }
-    if (body.company_id) return { value: body.company_id, source: 'body' }
-    return null
-}
-
 const applyTenant = (url, tenantId) => {
     if (url.searchParams.has('company_id')) url.searchParams.set('company_id', tenantId)
     const parts = url.pathname.split('/')
@@ -122,18 +107,7 @@ app.all('*', async (req, res) => {
         return res.status(401).json({ success: false, error: { code: 'TENANT_UNRESOLVED' } })
     }
 
-    const target = new URL(proxyPath, SSO_BASE)
-    const claimed = clientTenantFrom(target, req.body)
-    if (!claimed) {
-        log('INFO', 'Inside ssoGateway, no client company_id | token: ' + tenantId + ' | ' + req.method + ' ' + req.path)
-    } else if (claimed.value === tenantId) {
-        log('INFO', 'Inside ssoGateway, company_id matches token | ' + claimed.source + ': ' + claimed.value)
-    } else {
-        log('WARN', 'Inside ssoGateway, company_id MISMATCH — overriding with token | ' +
-            claimed.source + ': ' + claimed.value + ' | token: ' + tenantId + ' | ' + req.method + ' ' + req.path)
-    }
-
-    const url = applyTenant(target, tenantId)
+    const url = applyTenant(new URL(proxyPath, SSO_BASE), tenantId)
     const isBodyless = ['GET', 'HEAD', 'DELETE'].includes(req.method)
     const data = isBodyless ? undefined : { ...req.body, company_id: tenantId }
 
