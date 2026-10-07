@@ -44,6 +44,11 @@ const ALLOWED_PREFIXES = [
 // Public Entra redirect target — must not be reachable through the gateway.
 const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-connection/oidc/callback']
 
+const matchesPrefix = (pathname, prefixes) =>
+    prefixes.some((p) => pathname === p || pathname.startsWith(p + '/'))
+
+const sanitizeForLog = (value) => String(value).replace(/[\r\n]/g, ' ').slice(0, 200)
+
 // Resolves the proxy target against the fixed SSO base. The WHATWG parser
 // normalises traversal and rejects a different origin, and the allowlist is
 // applied to the RESOLVED pathname — so what is validated is what is requested.
@@ -52,8 +57,8 @@ const resolveProxyPath = (originalUrl) => {
     try {
         const candidate = new URL(originalUrl, SSO_BASE)
         if (candidate.origin !== SSO_BASE.origin) return null
-        if (!ALLOWED_PREFIXES.some((p) => candidate.pathname.startsWith(p))) return null
-        if (BLOCKED_PATHS.some((p) => candidate.pathname.startsWith(p))) return null
+        if (!matchesPrefix(candidate.pathname, ALLOWED_PREFIXES)) return null
+        if (matchesPrefix(candidate.pathname, BLOCKED_PATHS)) return null
         return candidate.pathname + candidate.search
     } catch (err) {
         log('INFO', 'Inside ssoGateway, unparseable request path: ' + err.message)
@@ -97,7 +102,7 @@ app.options('*', (req, res) => res.status(204).end())
 app.all('*', async (req, res) => {
     const proxyPath = resolveProxyPath(req.originalUrl)
     if (!proxyPath) {
-        log('INFO', 'Inside ssoGateway, unknown route rejected: ' + req.path)
+        log('INFO', 'Inside ssoGateway, unknown route rejected: ' + sanitizeForLog(req.path))
         return res.status(404).json({ success: false, error: { code: 'UNKNOWN_ROUTE' } })
     }
 
@@ -125,7 +130,7 @@ app.all('*', async (req, res) => {
                 timeout: 30000,
                 validateStatus: () => true   // relay SSO service statuses as-is
             })
-            log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + req.path + ' -> ' + response.status)
+            log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + sanitizeForLog(req.path) + ' -> ' + response.status)
             return res.status(response.status).json(response.data)
         } catch (err) {
             log('ERROR', 'Inside ssoGateway, upstream unreachable: ' + err.message)
