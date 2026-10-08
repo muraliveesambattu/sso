@@ -326,6 +326,52 @@ and VPC settings:
 gcloud run deploy sso-container --image <...>:<TAG> --region <REGION> --project <PROJECT_ID>
 ```
 
+**Changing variables on an existing service** — `--update-env-vars` merges,
+where `--set-env-vars` would replace the whole set. Build the string first, as a
+backslash-newline inside `'...'` would be taken literally:
+
+```bash
+ENVS='^|^'\
+'DB_SSL=<DB_SSL>|'\
+'VPC_CONNECTOR=<VPC_CONNECTOR>|'\
+'CLIENT_URL=<BASE_URL>,<ALT_ORIGIN>|'\
+'FIREBASE_CONFIG={"projectId":"<PROJECT_ID>","storageBucket":"<PROJECT_ID>.appspot.com","locationId":"<LOCATION>"}|'\
+'DATABASE_URL=postgresql://<DB_USER>:<URL_ENCODED_PASSWORD>@<DB_HOST>:5432/<DB_NAME>?host=/cloudsql/<PROJECT_ID>:<REGION>:<INSTANCE>'
+
+gcloud run deploy sso-container \
+  --image <IMAGE_URL>:<TAG> \
+  --region <REGION> \
+  --project <PROJECT_ID> \
+  --update-env-vars "$ENVS"
+```
+
+Example — `emc-mdnacloud-demo-t`:
+
+```bash
+ENVS='^|^'\
+'DB_SSL=false|'\
+'VPC_CONNECTOR=emc-mdnacloud-demo-t-vpc|'\
+'CLIENT_URL=https://emc-mdnacloud-demo-t.web.app,https://emc-mdnacloud-demo-t.firebaseapp.com|'\
+'FIREBASE_CONFIG={"projectId":"emc-mdnacloud-demo-t","storageBucket":"emc-mdnacloud-demo-t.appspot.com","locationId":"us-central"}|'\
+'DATABASE_URL=postgresql://sso_db_access:<URL_ENCODED_PASSWORD>@<DB_HOST>:5432/postgres?host=/cloudsql/emc-mdnacloud-demo-t:us-central1:zdnassomicroservices'
+
+gcloud run deploy sso-container \
+  --image <IMAGE_URL>:<TAG> \
+  --region us-central1 \
+  --project emc-mdnacloud-demo-t \
+  --update-env-vars "$ENVS"
+```
+
+Verify the assembled string before deploying — each line after the first must be
+one `NAME=value` pair:
+
+```bash
+echo "$ENVS" | tr '|' '\n'
+```
+
+> `^|^` is required here because `CLIENT_URL` and `FIREBASE_CONFIG` both contain
+> commas, which the default delimiter would split mid-value.
+
 ### Why these flags
 
 **`--max-instances 1` is load-bearing, not a cost control.** The service holds
