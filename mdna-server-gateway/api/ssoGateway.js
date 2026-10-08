@@ -1,10 +1,8 @@
 /*
-SSO Gateway — single point of communication between MDNA Console and the SSO
-Microservice for ADMIN operations (config CRUD, test-connection, feature flags).
-Forwards with X-Admin-API-Key attached server-side; the key never reaches the
-browser. company_id comes from the verified token, never from the client.
-Login/browser-flow endpoints are NOT routed here by design — their callers are
-unauthenticated users mid-login or Entra itself.
+SSO Gateway — proxies MDNA Console ADMIN calls (config CRUD, test-connection,
+flags) to the SSO Microservice, attaching X-Admin-API-Key server-side.
+company_id comes from the verified token, never the client. Login/browser-flow
+endpoints are not routed here: their callers cannot present a console token.
 
 Belongs in: MDNA-Server/CloudFunctions/functions/api/ssoGateway.js
 */
@@ -29,7 +27,7 @@ const SSO_BASE = parseBaseUrl(SSO_BASE_URL)
 
 // CWE-918 allowlist — checked immediately before calling axios.
 const SSO_ALLOWED_SCHEMES = new Set(['https:'])
-const SSO_ALLOWED_HOSTS = SSO_BASE ? [SSO_BASE.hostname] : []
+const SSO_ALLOWED_HOSTS = new Set(SSO_BASE ? [SSO_BASE.hostname] : [])
 
 // Admin surface of the SSO microservice — the ONLY routes this gateway serves.
 const ALLOWED_PREFIXES = [
@@ -45,13 +43,11 @@ const ALLOWED_PREFIXES = [
 const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-connection/oidc/callback']
 
 const matchesPrefix = (pathname, prefixes) =>
-    prefixes.some((p) => pathname === p || pathname.startsWith(p + '/'))
+    prefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))
 
-const sanitizeForLog = (value) => String(value).replace(/[\r\n]/g, ' ').slice(0, 200)
+const sanitizeForLog = (value) => String(value).replaceAll(/[\r\n]/g, ' ').slice(0, 200)
 
-// Resolves the proxy target against the fixed SSO base. The WHATWG parser
-// normalises traversal and rejects a different origin, and the allowlist is
-// applied to the RESOLVED pathname — so what is validated is what is requested.
+// Resolved via the WHATWG parser, so the allowlist checks the normalised path.
 const resolveProxyPath = (originalUrl) => {
     if (!SSO_BASE) return null
     try {
@@ -66,16 +62,69 @@ const resolveProxyPath = (originalUrl) => {
     }
 }
 
-// Tenant of the caller, from the claims authenticateHSTS leaves on req.context.
-const resolveTenantId = (context = {}) =>
-    context.tenantId || (context.role === ROLE.TENANT_OWNER ? context.identity : context.uid)
+// Only the two console roles carry a tenant; anything else → null → 401.
+const TENANT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 
-// Segments followed by the tenant: /sso/config/:company_id[/status],
-// /admin/flags/:company_id. Overwritten so a client value cannot address
-// another tenant; routes with nothing after the parent are untouched.
+const resolveTenantId = (context = {}) => {
+    let raw = context.tenantId
+    if (!raw && context.role === ROLE.TENANT_OWNER) raw = context.identity
+    if (!raw && context.role === ROLE.ADMINISTRATIVE_USER) raw = context.uid
+    return typeof raw === 'string' && TENANT_ID_PATTERN.test(raw) ? raw : null
+}
+
+// CR/LF would split the header; control chars make Node reject the request.
+const PRINTABLE_ASCII = /^[\x20-\x7E]*$/
+
+const sanitizeHeaderValue = (value, maxLen = 320) =>
+    typeof value === 'string' && PRINTABLE_ASCII.test(value) ? value.slice(0, maxLen) : null
+
+// Arrays and null are typeof 'object' but are not valid JSON request bodies.
+const isPlainObject = (value) =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+
+// Transport failures only — an upstream 4xx/5xx resolves and is relayed.
+// POST/PATCH are not retried: a save that failed on the way back would apply twice.
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'PUT', 'DELETE'])
+const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE'])
+
+const MAX_BODY_BYTES = 100_000
+const RETRY_BASE_DELAY_MS = 200
+const RETRY_MAX_DELAY_MS = 2000
+// Three retried attempts plus backoff must fit the function timeout.
+const SINGLE_ATTEMPT_TIMEOUT_MS = 30000
+const RETRY_ATTEMPT_TIMEOUT_MS = 8000
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const requestWithRetry = async (config, attempts, logContext) => {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await axios(config)
+        } catch (err) {
+            if (attempt >= attempts) {
+                log('ERROR', 'Inside ssoGateway, upstream unreachable after ' + attempt +
+                    ' attempt(s) ' + logContext + ': ' + err.message)
+                throw err
+            }
+            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS)
+            log('WARN', 'Inside ssoGateway, attempt ' + attempt + ' failed ' + logContext +
+                ', retrying in ' + delay + 'ms: ' + err.message)
+            await sleep(delay)
+        }
+    }
+}
+
+// /sso/config/:company_id[/status], /admin/flags/:company_id — overwritten so a
+// client value cannot address another tenant.
 const TENANT_SEGMENT_PARENTS = new Set(['config', 'flags'])
 
 const applyTenant = (url, tenantId) => {
+    if (typeof tenantId !== 'string' || !tenantId) {
+        const err = new TypeError('applyTenant: tenantId must be a non-empty string')
+        err.statusCode = 400
+        err.code = 'INVALID_TENANT_ID'
+        throw err
+    }
     if (url.searchParams.has('company_id')) url.searchParams.set('company_id', tenantId)
     const parts = url.pathname.split('/')
     for (let i = 0; i < parts.length - 1; i++) {
@@ -112,28 +161,58 @@ app.all('*', async (req, res) => {
         return res.status(401).json({ success: false, error: { code: 'TENANT_UNRESOLVED' } })
     }
 
-    const url = applyTenant(new URL(proxyPath, SSO_BASE), tenantId)
-    const isBodyless = ['GET', 'HEAD', 'DELETE'].includes(req.method)
+    const isBodyless = BODYLESS_METHODS.has(req.method)
+    if (!isBodyless && !isPlainObject(req.body)) {
+        log('INFO', 'Inside ssoGateway, rejected non-object body on ' + req.method)
+        return res.status(400).json({ success: false, error: { code: 'INVALID_BODY' } })
+    }
+
+    if (!isBodyless) {
+        let bodyBytes
+        try {
+            // Byte length, not string length — multi-byte payloads measure larger.
+            bodyBytes = Buffer.byteLength(JSON.stringify(req.body), 'utf8')
+        } catch (err) {
+            log('INFO', 'Inside ssoGateway, unserialisable body on ' + req.method + ': ' + err.message)
+            return res.status(400).json({ success: false, error: { code: 'INVALID_BODY' } })
+        }
+        if (bodyBytes > MAX_BODY_BYTES) {
+            log('INFO', 'Inside ssoGateway, rejected oversized body on ' + req.method)
+            return res.status(413).json({ success: false, error: { code: 'BODY_TOO_LARGE' } })
+        }
+    }
+
+    let url
+    try {
+        url = applyTenant(new URL(proxyPath, SSO_BASE), tenantId)
+    } catch (err) {
+        log('ERROR', 'Inside ssoGateway, could not build the proxy target: ' + err.message)
+        return res.status(400).json({ success: false, error: { code: 'INVALID_PATH' } })
+    }
     const data = isBodyless ? undefined : { ...req.body, company_id: tenantId }
 
-    if (SSO_ALLOWED_SCHEMES.has(url.protocol) && SSO_ALLOWED_HOSTS.includes(url.hostname)) {
+    const attempts = IDEMPOTENT_METHODS.has(req.method) ? 3 : 1
+
+    if (SSO_ALLOWED_SCHEMES.has(url.protocol) && SSO_ALLOWED_HOSTS.has(url.hostname)) {
         try {
-            const response = await axios({
+            const response = await requestWithRetry({
                 method: req.method,
                 url: url.toString(),
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Admin-API-Key': SSO_ADMIN_API_KEY,
-                    'X-Forwarded-User': req.context?.email || 'console-user'
+                    'X-Forwarded-User': sanitizeHeaderValue(req.context?.email) || 'console-user'
                 },
                 data,
-                timeout: 30000,
+                timeout: attempts > 1 ? RETRY_ATTEMPT_TIMEOUT_MS : SINGLE_ATTEMPT_TIMEOUT_MS,
                 validateStatus: () => true   // relay SSO service statuses as-is
-            })
+            },
+            attempts,
+            req.method + ' ' + sanitizeForLog(req.path))
             log('INFO', 'Inside ssoGateway, proxied ' + req.method + ' ' + sanitizeForLog(req.path) + ' -> ' + response.status)
             return res.status(response.status).json(response.data)
-        } catch (err) {
-            log('ERROR', 'Inside ssoGateway, upstream unreachable: ' + err.message)
+        } catch {
+            // requestWithRetry already logged the final failure with attempt count.
             return res.status(502).json({ success: false, error: { code: 'UPSTREAM_UNREACHABLE' } })
         }
     }
