@@ -37,11 +37,11 @@ const {
 // ── Firestore mock ────────────────────────────────────────────────────────────
 // resolveUser's non-JIT path walks two chains off admin.firestore():
 //   collection('tenants').doc(id).collection('users').where('email').limit(1).get()
-//   collection('tenants').doc(id).collection('users').where('UUID').get()
+//   collection('tenants').doc(id).collection('users').where('UUID').limit(1).get()
 // plus collection('tenants').doc(id).update() for the tenant timestamp. The
 // helper below returns that shape and exposes the write spies so a test can
 // assert whether the "Joined" transition actually ran.
-const firestoreDouble = ({ userDoc = null, uuidDoc = undefined } = {}) => {
+const firestoreDouble = ({ userDoc = null, uuidDoc = undefined, userDocFor = null } = {}) => {
   const userRefUpdate = jest.fn().mockResolvedValue(undefined);
   const tenantUpdate  = jest.fn().mockResolvedValue(undefined);
 
@@ -54,9 +54,12 @@ const firestoreDouble = ({ userDoc = null, uuidDoc = undefined } = {}) => {
   });
 
   const usersCollection = {
-    where: jest.fn((field) => (field === 'email'
-      ? { limit: jest.fn(() => ({ get: jest.fn().mockResolvedValue(snapshotFor(userDoc)) })) }
-      : { get: jest.fn().mockResolvedValue(snapshotFor(stepFDoc)) })),
+    where: jest.fn((field, op, value) => (field === 'email'
+      ? { limit: jest.fn(() => ({ get: jest.fn().mockResolvedValue(snapshotFor(userDocFor ? userDocFor(value) : userDoc)) })) }
+      : (() => {
+          const get = jest.fn().mockResolvedValue(snapshotFor(stepFDoc));
+          return { get, limit: jest.fn(() => ({ get })) };
+        })())),
   };
 
   const db = {
@@ -69,7 +72,7 @@ const firestoreDouble = ({ userDoc = null, uuidDoc = undefined } = {}) => {
   };
 
   admin.firestore.mockReturnValue(db);
-  return { userRefUpdate, tenantUpdate };
+  return { userRefUpdate, tenantUpdate, usersCollection };
 };
 
 // Mirrors the real Firestore document: the id and the display name are two
@@ -384,6 +387,60 @@ describe('userResolution.service', () => {
       statusCode: 403,
       code: 'USER_NOT_PROVISIONED',
     });
+  });
+
+  test('matches a mixed-case Entra email against a lowercase Firestore email', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const user = ssoUser();
+    const { usersCollection } = firestoreDouble({
+      userDocFor: (email) => (email === 'user@example.com' ? user : null),
+    });
+
+    const result = await resolveUser('company-1', {
+      email: 'User@Example.COM',
+      oid: 'oid-case',
+      name: 'Mixed Case',
+      groups: [],
+    }, 'oidc');
+
+    expect(result.action).toBe('login');
+    expect(usersCollection.where).toHaveBeenCalledWith('email', '==', 'user@example.com');
+    expect(usersCollection.where).not.toHaveBeenCalledWith('email', '==', 'User@Example.COM');
+  });
+
+  test('falls back to the original-case email for a Firestore user stored with capitals', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const user = ssoUser({ email: 'User@Example.COM' });
+    const { usersCollection } = firestoreDouble({
+      userDocFor: (email) => (email === 'User@Example.COM' ? user : null),
+    });
+
+    const result = await resolveUser('company-1', {
+      email: 'User@Example.COM',
+      oid: 'oid-legacy',
+      name: 'Legacy Case',
+      groups: [],
+    }, 'oidc');
+
+    expect(result.action).toBe('login');
+    expect(usersCollection.where).toHaveBeenCalledWith('email', '==', 'user@example.com');
+    expect(usersCollection.where).toHaveBeenCalledWith('email', '==', 'User@Example.COM');
+  });
+
+  test('normalises the SAML emailaddress attribute before the lookup', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: false });
+    const { usersCollection } = firestoreDouble({
+      userDocFor: (email) => (email === 'user@example.com' ? ssoUser() : null),
+    });
+
+    const result = await resolveUser('company-1', {
+      emailaddress: ' User@Example.com ',
+      objectidentifier: 'oid-saml',
+      groups: [],
+    }, 'saml');
+
+    expect(result.action).toBe('login');
+    expect(usersCollection.where).toHaveBeenCalledWith('email', '==', 'user@example.com');
   });
 
   test('rejects a non-JIT login for an expired account', async () => {
