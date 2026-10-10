@@ -10,7 +10,14 @@ const { onRequest } = require('firebase-functions/v2/https')
 const axios = require('axios')
 const { log } = require('firebase-functions/logger')
 const { expressApp } = require('../util/additionalCommonUtil')
-const { MIDDLEWARES, ROLE } = require('../util/constant')
+const { MIDDLEWARES, ROLE, SSO_GATEWAY } = require('../util/constant')
+const {
+    MAX_BODY_BYTES,
+    RETRY_BASE_DELAY_MS,
+    RETRY_MAX_DELAY_MS,
+    SINGLE_ATTEMPT_TIMEOUT_MS,
+    RETRY_ATTEMPT_TIMEOUT_MS,
+} = SSO_GATEWAY
 
 const SSO_BASE_URL = process.env.SSO_BASE_URL
 const SSO_ADMIN_API_KEY = process.env.SSO_ADMIN_API_KEY
@@ -86,13 +93,6 @@ const isPlainObject = (value) =>
 // POST/PATCH are not retried: a save that failed on the way back would apply twice.
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'PUT', 'DELETE'])
 const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE'])
-
-const MAX_BODY_BYTES = 100_000
-const RETRY_BASE_DELAY_MS = 200
-const RETRY_MAX_DELAY_MS = 2000
-// Three retried attempts plus backoff must fit the function timeout.
-const SINGLE_ATTEMPT_TIMEOUT_MS = 30000
-const RETRY_ATTEMPT_TIMEOUT_MS = 8000
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 

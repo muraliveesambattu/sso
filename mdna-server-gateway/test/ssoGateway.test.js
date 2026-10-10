@@ -9,6 +9,13 @@ const SSO_BASE_URL = 'https://sso-123.us-central1.run.app'
 
 const mockAxios = jest.fn()
 const mockLog = jest.fn()
+const mockSsoGateway = {
+    MAX_BODY_BYTES: 100_000,
+    RETRY_BASE_DELAY_MS: 200,
+    RETRY_MAX_DELAY_MS: 2000,
+    SINGLE_ATTEMPT_TIMEOUT_MS: 30000,
+    RETRY_ATTEMPT_TIMEOUT_MS: 8000,
+}
 
 let routes
 let loadGateway
@@ -46,6 +53,7 @@ describe('ssoGateway', () => {
                 DEVICE: 'device',
                 HMX: 'HMX Service Account',
             },
+            SSO_GATEWAY: mockSsoGateway,
         }))
         jest.doMock('firebase-functions/logger', () => ({ log: mockLog }))
         jest.doMock('firebase-functions/v2/https', () => ({ onRequest: (app) => app }))
@@ -327,6 +335,7 @@ describe('ssoGateway - misconfigured SSO_BASE_URL', () => {
         jest.doMock('../util/constant', () => ({
             MIDDLEWARES: { AUTH_HSTS: 'authenticateHSTS' },
             ROLE: { TENANT_OWNER: 'Tenant Owner', ADMINISTRATIVE_USER: 'Administrative User' },
+            SSO_GATEWAY: mockSsoGateway,
         }))
         jest.doMock('firebase-functions/logger', () => ({ log: mockLog }))
         jest.doMock('firebase-functions/v2/https', () => ({ onRequest: (app) => app }))
