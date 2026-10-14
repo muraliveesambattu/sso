@@ -37,6 +37,12 @@ const samlCallbackController = async (req, res, next) => {
       clientIp
     );
 
+    // Test Connection: no token. The popup only signals "done"; the console already
+    // holds the sessionRef and fetches the result from the result endpoint.
+    if (result.testSessionRef) {
+      return res.redirect(`${FRONTEND_URL}/auth/oidc/callback?saml_test=1`);
+    }
+
     // Redirect to frontend with customToken in URL
     // Frontend oidc-callback component reads ?token= and calls signInWithCustomToken()
     logger.debug(`[SAML] Redirecting to frontend with customToken | uid: ${result.user?.user_id}`);

@@ -75,4 +75,12 @@ describe('samlCallback.Controller', () => {
 
     expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?error=SAML_BAD');
   });
+  test('redirects a Test Connection result to the console without a token', async () => {
+    const res = mockRes();
+    processSamlCallback.mockResolvedValue({ testSessionRef: 'ref-1' });
+
+    await samlCallbackController(mockReq({ SAMLResponse: 'response-1', RelayState: 'relay-1' }), res, jest.fn());
+
+    expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?saml_test=1');
+  });
 });

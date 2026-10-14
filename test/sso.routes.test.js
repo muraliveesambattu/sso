@@ -31,6 +31,7 @@ describe('sso.routes', () => {
     const handleOidcRedirect = jest.fn();
     const handleTestConnection = jest.fn();
     const oidcTestCallbackController = jest.fn();
+    const handleSamlTestResult = jest.fn();
     const handleSaveSsoConfig = jest.fn();
     const handleGetSsoConfig = jest.fn();
     const handleSetSsoStatus = jest.fn();
@@ -50,6 +51,7 @@ describe('sso.routes', () => {
     jest.doMock('../src/controllers/oidcRedirect.controller', () => ({ handleOidcRedirect }));
     jest.doMock('../src/controllers/testConnection.controller', () => ({ handleTestConnection }));
     jest.doMock('../src/controllers/oidcTestCallback.controller', () => ({ oidcTestCallbackController }));
+    jest.doMock('../src/controllers/samlTestResult.controller', () => ({ handleSamlTestResult }));
     jest.doMock('../src/controllers/saveSsoConfig.controller', () => ({ handleSaveSsoConfig }));
     jest.doMock('../src/controllers/ssoAdmin.controller', () => ({
       handleGetSsoConfig,
@@ -86,6 +88,7 @@ describe('sso.routes', () => {
     // Config endpoints: admin key OR the named zdna_roles permission
     expect(routerMock.post).toHaveBeenCalledWith('/test-connection', permissionSentinels['my_services:editable'], handleTestConnection);
     expect(routerMock.post).toHaveBeenCalledWith('/test-connection/oidc/callback', oidcTestCallbackController);
+    expect(routerMock.post).toHaveBeenCalledWith('/test-connection/saml/result', handleSamlTestResult);
     expect(routerMock.post).toHaveBeenCalledWith('/sso/save', permissionSentinels['my_services:editable'], handleSaveSsoConfig);
     expect(routerMock.get).toHaveBeenCalledWith('/sso/config', permissionSentinels['my_services:view'], handleGetSsoConfig);
     expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', permissionSentinels['my_services:editable'], handleSetSsoStatus);

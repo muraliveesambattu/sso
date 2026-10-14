@@ -1,7 +1,9 @@
 const https  = require('node:https');
 const crypto = require('node:crypto');
 const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
-const { microsoft } = require('../../config/constants');
+const { microsoft, defaults } = require('../../config/constants');
+const { logger } = require('../../config/logger');
+const { buildSamlRedirectUrl } = require('../Saml/samlAuthRequest.service');
 const { isCertAuth }        = require('../../utils/shared/authMethod.util');
 const ssoIntegration = require('../../models/ssoIntegration.model');
 const { Op } = require('sequelize');
@@ -243,6 +245,19 @@ const buildOidcTestSession = async ({ tenant_id, client_id, client_secret, auth_
   };
 };
 
+// Builds the browser-test session for SAML: an Entra login (ForceAuthn) whose ACS callback is
+// validated against the unsaved cert/sso_url held server-side in samlRequestStore.
+const buildSamlTestSession = async ({ sso_url, certificate }) => {
+  const sessionRef = crypto.randomUUID();
+  const entityId   = defaults.SAML_ENTITY_ID;
+  const acsUrl     = defaults.SAML_ACS_URL;
+  const redirectUrl = await buildSamlRedirectUrl(entityId, acsUrl, sso_url, {}, sessionRef, undefined, {
+    forceAuthn:  true,
+    testContext: { sessionRef, certificate, sso_url, entity_id: entityId, acs_url: acsUrl },
+  });
+  return { protocol: 'saml', sessionRef, redirectUrl };
+};
+
 // tenant_id gets interpolated into Microsoft URL PATHS (tokenUrl/discoveryUrl/
 // authorizeUrl/samlMetadataUrl). Without a format check a value like
 // "common/../x" would steer the request path anywhere on the (allowlisted)
@@ -309,7 +324,19 @@ const testConnection = async (payload) => {
   }
 
   if (protocol === 'saml') {
-    return testSamlDiscovery({ tenant_id, sso_url, certificate });
+    const check = await testSamlDiscovery({ tenant_id, sso_url, certificate });
+
+    // No popup unless the metadata/cert check passed AND there is a cert + sso_url to
+    // validate a real login against. The console opens the popup only when `redirectUrl`
+    // is present, so omitting `data` leaves the old behaviour.
+    if (!check.success || !sso_url || !certificate) return check;
+
+    try {
+      return { ...check, data: await buildSamlTestSession({ sso_url, certificate }) };
+    } catch (err) {
+      logger.warn('[SAML_TEST_SESSION_FAILED]', { error: err.message });
+      return check;
+    }
   }
 
   return { success: false, message: 'Unknown protocol' };

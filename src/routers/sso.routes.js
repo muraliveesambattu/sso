@@ -8,6 +8,7 @@ const { handleOidcCallback }    = require('../controllers/oidcTokenExchange.cont
 const { handleOidcRedirect }    = require('../controllers/oidcRedirect.controller');
 const { handleTestConnection }  = require('../controllers/testConnection.controller');
 const { oidcTestCallbackController } = require('../controllers/oidcTestCallback.controller');
+const { handleSamlTestResult } = require('../controllers/samlTestResult.controller');
 const { handleSaveSsoConfig }   = require('../controllers/saveSsoConfig.controller');
 const { handleGetSsoConfig, handleSetSsoStatus, handleDeleteSsoConfig } = require('../controllers/ssoAdmin.controller');
 const {
@@ -49,6 +50,10 @@ router.post('/test-connection', requireAdminKeyOrPermission('my_services:editabl
 // SSO configuration test — Phase 2: parent window posts { code, state, sessionRef }
 // after the Azure popup returns. No admin key — single-use sessionRef is the credential.
 router.post('/test-connection/oidc/callback', oidcTestCallbackController);
+
+// SAML test popup: parent window posts { sessionRef } after the popup closes.
+// No admin key — single-use sessionRef is the credential (same model as the OIDC callback).
+router.post('/test-connection/saml/result', handleSamlTestResult);
 
 // Save & activate SSO configuration with optional JIT mappings
 // Protected: admin key or editable access to My Services

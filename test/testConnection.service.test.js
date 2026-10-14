@@ -16,7 +16,16 @@ jest.mock('../src/models/ssoIntegration.model', () => ({ findOne: jest.fn() }));
 // need for this mock entirely.
 jest.mock('sequelize', () => ({ Op: {}, DataTypes: {} }));
 
+jest.mock('../src/services/Saml/samlAuthRequest.service', () => ({
+  buildSamlRedirectUrl: jest.fn(),
+}));
+
+jest.mock('../src/config/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
 jest.mock('../src/config/constants', () => ({
+  defaults: { SAML_ENTITY_ID: 'https://sp.example.com/metadata', SAML_ACS_URL: 'https://sp.example.com/callback' },
   microsoft: {
     tokenUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
     discoveryUrl: (tenantId) => `https://login.microsoftonline.com/${tenantId}/v2.0/.well-known/openid-configuration`,
@@ -36,6 +45,7 @@ const https = require('node:https');
 const { extractFromPkcs12 } = require('../src/utils/oidc/pkcs12.util');
 const ssoIntegration = require('../src/models/ssoIntegration.model');
 const { testConnection } = require('../src/services/SSO/testConnection.service');
+const { buildSamlRedirectUrl } = require('../src/services/Saml/samlAuthRequest.service');
 
 const mockRequest = (moduleRef, responder) => jest.spyOn(moduleRef, 'request').mockImplementation((url, options, callback) => {
   const req = new EventEmitter();
@@ -269,6 +279,83 @@ describe('testConnection.service', () => {
       `https://login.microsoftonline.com/${TENANT_GUID}/federationmetadata/2007-06/federationmetadata.xml?appid=${APP_GUID}`
     );
     expect(result.success).toBe(true);
+  });
+
+  describe('SAML test popup session', () => {
+    const rawCert = 'MIIBExampleCert000000000000000000000000';
+    const ssoUrl  = `https://login.microsoftonline.com/${TENANT_GUID}/saml2?appid=${APP_GUID}`;
+    const okMetadata = () => mockRequest(https, () => ({ statusCode: 200, body: buildMetadataXml(rawCert) }));
+
+    beforeEach(() => buildSamlRedirectUrl.mockReset());
+
+    test('returns sessionRef and redirectUrl and registers a ForceAuthn test request', async () => {
+      okMetadata();
+      buildSamlRedirectUrl.mockResolvedValue('https://login.microsoftonline.com/saml2?SAMLRequest=abc');
+
+      const certificate = encodeUploadedCert(rawCert);
+      const result = await testConnection({ protocol: 'saml', tenant_id: TENANT_GUID, sso_url: ssoUrl, certificate });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({
+        protocol: 'saml',
+        sessionRef: expect.any(String),
+        redirectUrl: 'https://login.microsoftonline.com/saml2?SAMLRequest=abc',
+      });
+      expect(buildSamlRedirectUrl).toHaveBeenCalledWith(
+        'https://sp.example.com/metadata',
+        'https://sp.example.com/callback',
+        ssoUrl,
+        {},
+        result.data.sessionRef,
+        undefined,
+        {
+          forceAuthn: true,
+          testContext: {
+            sessionRef: result.data.sessionRef,
+            certificate,
+            sso_url: ssoUrl,
+            entity_id: 'https://sp.example.com/metadata',
+            acs_url: 'https://sp.example.com/callback',
+          },
+        }
+      );
+      expect(JSON.stringify(result)).not.toContain(certificate);
+    });
+
+    test('opens no popup when no certificate was uploaded', async () => {
+      okMetadata();
+
+      const result = await testConnection({ protocol: 'saml', tenant_id: TENANT_GUID, sso_url: ssoUrl });
+
+      expect(result.data).toBeUndefined();
+      expect(buildSamlRedirectUrl).not.toHaveBeenCalled();
+    });
+
+    test('opens no popup when the metadata/cert check fails', async () => {
+      mockRequest(https, () => ({ statusCode: 200, body: buildMetadataXml('MIIBAzureSigningCert00000000000000000000') }));
+
+      const result = await testConnection({
+        protocol: 'saml', tenant_id: TENANT_GUID, sso_url: ssoUrl, certificate: encodeUploadedCert(rawCert),
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.data).toBeUndefined();
+      expect(buildSamlRedirectUrl).not.toHaveBeenCalled();
+    });
+
+    test('falls back to the plain result when the redirect cannot be built', async () => {
+      okMetadata();
+      buildSamlRedirectUrl.mockRejectedValue(new Error('boom'));
+
+      const result = await testConnection({
+        protocol: 'saml', tenant_id: TENANT_GUID, sso_url: ssoUrl, certificate: encodeUploadedCert(rawCert),
+      });
+
+      expect(result).toEqual({
+        success: true,
+        message: 'Connection successful — SAML IdP metadata reachable and certificate verified',
+      });
+    });
   });
 
   test('fails when the uploaded certificate does not match the Azure metadata', async () => {

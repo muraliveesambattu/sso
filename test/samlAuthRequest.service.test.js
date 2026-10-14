@@ -88,6 +88,52 @@ describe('samlAuthRequest.service', () => {
     service.samlRequestStore.clear();
   });
 
+  test('adds ForceAuthn to the AuthnRequest only when requested', async () => {
+    const { service, mocks } = loadSamlAuthRequestService();
+    const args = ['https://sp.example.com/metadata', 'https://sp.example.com/callback',
+      'https://login.microsoftonline.com/tenant/saml2', {}, 'session-4'];
+
+    await service.buildSamlRedirectUrl(...args);
+    expect(mocks.deflateRaw.mock.calls[0][0].toString('utf8')).not.toContain('ForceAuthn');
+
+    await service.buildSamlRedirectUrl(...args, undefined, { forceAuthn: true });
+    expect(mocks.deflateRaw.mock.calls[1][0].toString('utf8')).toContain('ForceAuthn="true"');
+    service.samlRequestStore.clear();
+  });
+
+  test('stores a test context on the request entry only for Test Connection requests', async () => {
+    const { service } = loadSamlAuthRequestService();
+    const args = ['https://sp.example.com/metadata', 'https://sp.example.com/callback',
+      'https://login.microsoftonline.com/tenant/saml2', {}, 'session-5'];
+
+    await service.buildSamlRedirectUrl(...args);
+    expect(service.samlRequestStore.get('_zdna_request-uuid')).not.toHaveProperty('test');
+
+    const testContext = { sessionRef: 'ref-1', certificate: 'CERT', sso_url: args[2] };
+    await service.buildSamlRedirectUrl(...args, undefined, { testContext });
+    expect(service.samlRequestStore.get('_zdna_request-uuid').test).toEqual({ ...testContext, result: null });
+    service.samlRequestStore.clear();
+  });
+
+  test('takeSamlTestResult is pending, then single-use, and null when unknown or expired', async () => {
+    const { service } = loadSamlAuthRequestService();
+    const args = ['https://sp.example.com/metadata', 'https://sp.example.com/callback',
+      'https://login.microsoftonline.com/tenant/saml2', {}, 'session-6'];
+    await service.buildSamlRedirectUrl(...args, undefined, { testContext: { sessionRef: 'ref-9' } });
+
+    expect(service.takeSamlTestResult('unknown')).toBeNull();
+    expect(service.takeSamlTestResult('ref-9')).toEqual({ pending: true });
+
+    service.samlRequestStore.get('_zdna_request-uuid').test.result = { success: true };
+    expect(service.takeSamlTestResult('ref-9')).toEqual({ success: true });
+    expect(service.takeSamlTestResult('ref-9')).toBeNull();
+
+    await service.buildSamlRedirectUrl(...args, undefined, { testContext: { sessionRef: 'ref-10' } });
+    service.samlRequestStore.get('_zdna_request-uuid').timestamp = Date.now() - 700000;
+    expect(service.takeSamlTestResult('ref-10')).toBeNull();
+    service.samlRequestStore.clear();
+  });
+
   test('throws a sanitized error when compression fails', async () => {
     const { service } = loadSamlAuthRequestService({
       deflateImpl: (buffer, cb) => cb(new Error('compression failed')),

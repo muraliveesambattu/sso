@@ -19,6 +19,7 @@ const handleTestConnection = async (req, res, next) => {
     const tenant_id    = trimStr(req.body.tenant_id);
     const client_id    = trimStr(req.body.client_id);
     const sso_url      = trimStr(req.body.sso_url);
+    const company_id   = trimStr(req.body.company_id);
     const redirect_uri = trimStr(req.body.redirect_uri);
     const scope        = trimStr(req.body.scope);
     const domains      = trimStr(firstDomain(req.body.domains))?.toLowerCase();
@@ -35,7 +36,7 @@ const handleTestConnection = async (req, res, next) => {
 
     logger.info('Test connection request', { action: 'test_connection', protocol, auth_method, ip: req.ip });
 
-    const result = await testConnection({ protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope, domains });
+    const result = await testConnection({ protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope, domains, company_id });
 
     // For OIDC — store internal config in tcStore keyed by sessionRef.
     // Popup will send sessionRef back in callback so we can retrieve it.

@@ -58,7 +58,7 @@ const signSamlRedirectQuery = (samlRequest, relayState) => {
 // store (Redis / Firestore with TTL). Current Cloud Run min-instances=1 makes this acceptable.
 const samlRequestStore = new Map();
 
-const generateAuthnRequestXml = (authnRequestId, entityId, acsUrl, ssoUrl) => {
+const generateAuthnRequestXml = (authnRequestId, entityId, acsUrl, ssoUrl, forceAuthn = false) => {
   const issueInstant = new Date().toISOString();
   // Single line XML - no formatting, no line breaks
   
@@ -72,16 +72,22 @@ logger.debug('[XML_GENERATION_PARAMS]', {
     ssoUrlType: typeof ssoUrl
   });
 
-  return `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${authnRequestId}" Version="2.0" IssueInstant="${issueInstant}" Destination="${ssoUrl}" AssertionConsumerServiceURL="${acsUrl}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>${entityId}</saml:Issuer><samlp:NameIDPolicy Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" AllowCreate="true"/></samlp:AuthnRequest>`;
+  const forceAuthnAttr = forceAuthn ? ' ForceAuthn="true"' : '';
+
+  return `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${authnRequestId}" Version="2.0" IssueInstant="${issueInstant}"${forceAuthnAttr} Destination="${ssoUrl}" AssertionConsumerServiceURL="${acsUrl}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>${entityId}</saml:Issuer><samlp:NameIDPolicy Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" AllowCreate="true"/></samlp:AuthnRequest>`;
 };
 
-const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId, companyId) => {
+// `options.testContext` marks a Test Connection request: { sessionRef, certificate, sso_url,
+// entity_id, acs_url } for the unsaved config. The ACS callback detects it from this
+// server-side entry (never from RelayState). `options.forceAuthn` forces a fresh login.
+const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId, companyId, options = {}) => {
   try {
     // Generate unique AuthnRequest ID
     const authnRequestId = `_zdna_${crypto.randomUUID()}`;
     
     // Generate AuthnRequest XML
-    const xml = generateAuthnRequestXml(authnRequestId, entityId, acsUrl, ssoUrl);
+    const { testContext, forceAuthn = false } = options;
+    const xml = generateAuthnRequestXml(authnRequestId, entityId, acsUrl, ssoUrl, forceAuthn);
     
     logger.debug('[SAML_AUTHN_REQUEST_XML]', xml);
     
@@ -95,7 +101,8 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
         entity_id:  entityId,
         acs_url:    acsUrl,
         company_id: companyId,
-      }
+      },
+      ...(testContext && { test: { ...testContext, result: null } }),
     });
 
     // Compress with DEFLATE
@@ -144,4 +151,20 @@ const buildSamlRedirectUrl = async (entityId, acsUrl, ssoUrl, session, sessionId
   }
 };
 
-module.exports = { buildSamlRedirectUrl, samlRequestStore };
+// Single-use read of a Test Connection result by sessionRef. Returns null when the session
+// is unknown or expired, { pending: true } until the ACS callback has run, then the result.
+const takeSamlTestResult = (sessionRef) => {
+  for (const [id, entry] of samlRequestStore.entries()) {
+    if (entry.test?.sessionRef !== sessionRef) continue;
+    if (Date.now() - entry.timestamp > SESSION_TTL_MS) {
+      samlRequestStore.delete(id);
+      return null;
+    }
+    if (!entry.test.result) return { pending: true };
+    samlRequestStore.delete(id);
+    return entry.test.result;
+  }
+  return null;
+};
+
+module.exports = { buildSamlRedirectUrl, samlRequestStore, takeSamlTestResult };

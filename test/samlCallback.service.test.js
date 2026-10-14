@@ -236,4 +236,87 @@ describe('samlCallback.service', () => {
       }),
     }));
   });
+  describe('Test Connection branch', () => {
+    const roleAttr = '<Attribute Name="http://schemas.microsoft.com/ws/2008/06/identity/claims/role"><AttributeValue>Zebra.Admin</AttributeValue></Attribute>';
+    const buildTestEntry = (overrides = {}) => ({
+      timestamp: fixedNow - 2000,
+      ssoContext: {},
+      test: {
+        sessionRef: 'ref-1',
+        certificate: 'uploaded-cert',
+        sso_url: 'https://login.microsoftonline.com/tenant-123/saml2?appid=app-1',
+        entity_id: 'entity-id-1',
+        result: null,
+        ...overrides,
+      },
+    });
+    const withRole = (xml) => xml.replace('</AttributeStatement>', `${roleAttr}</AttributeStatement>`);
+
+    test('validates with the uploaded cert, returns claims, and resolves no user or token', async () => {
+      const entry = buildTestEntry();
+      samlRequestStore.get.mockReturnValue(entry);
+
+      const out = await processSamlCallback(encodeSaml(withRole(buildResponseXml({ includeOid: false }))), null, {}, '1.2.3.4');
+
+      expect(out).toEqual({ testSessionRef: 'ref-1' });
+      expect(getSamlConfig).not.toHaveBeenCalled();
+      expect(resolveUser).not.toHaveBeenCalled();
+      expect(generateCustomToken).not.toHaveBeenCalled();
+      expect(verifyXmlSignature).toHaveBeenCalledWith(expect.any(String), 'uploaded-cert');
+      expect(validateIssuer).toHaveBeenCalledWith(expect.any(Object), 'tenant-123');
+      expect(validateAudience).toHaveBeenCalledWith(expect.any(Object), 'entity-id-1');
+      expect(entry.test.result).toEqual({
+        success: true,
+        email: 'user@example.com',
+        claims: { roles: ['Zebra.Admin'], groups: ['group-a', 'group-b'], groupsOverage: false },
+      });
+    });
+
+    test('records a failed result when signature verification fails', async () => {
+      const entry = buildTestEntry();
+      samlRequestStore.get.mockReturnValue(entry);
+      verifyXmlSignature.mockImplementationOnce(() => {
+        throw Object.assign(new Error('bad signature'), { code: 'INVALID_SIGNATURE' });
+      });
+
+      const out = await processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4');
+
+      expect(out).toEqual({ testSessionRef: 'ref-1' });
+      expect(entry.test.result).toEqual({ success: false, code: 'INVALID_SIGNATURE', message: 'bad signature' });
+    });
+
+    test('records a failed result when the audience does not match', async () => {
+      const entry = buildTestEntry();
+      samlRequestStore.get.mockReturnValue(entry);
+      validateAudience.mockImplementationOnce(() => {
+        throw Object.assign(new Error('wrong audience'), { code: 'INVALID_AUDIENCE' });
+      });
+
+      await processSamlCallback(encodeSaml(buildResponseXml()), null, {}, '1.2.3.4');
+
+      expect(entry.test.result).toMatchObject({ success: false, code: 'INVALID_AUDIENCE' });
+    });
+
+    test('records a failed result when the assertion is missing', async () => {
+      const entry = buildTestEntry();
+      samlRequestStore.get.mockReturnValue(entry);
+      const xml = buildResponseXml().replace(/<Assertion[\s\S]*<\/Assertion>/, '');
+
+      await processSamlCallback(encodeSaml(xml), null, {}, '1.2.3.4');
+
+      expect(entry.test.result).toMatchObject({ success: false, code: 'MISSING_ASSERTION' });
+    });
+
+    test('flags group overage when Entra sends groups.link instead of the group list', async () => {
+      const entry = buildTestEntry();
+      samlRequestStore.get.mockReturnValue(entry);
+      const overage = '<Attribute Name="http://schemas.microsoft.com/claims/groups.link"><AttributeValue>https://graph.example/groups</AttributeValue></Attribute>';
+      const xml = buildResponseXml()
+        .replace(/<Attribute Name="groups"[\s\S]*?<\/Attribute>/, overage);
+
+      await processSamlCallback(encodeSaml(xml), null, {}, '1.2.3.4');
+
+      expect(entry.test.result.claims).toEqual({ roles: [], groups: [], groupsOverage: true });
+    });
+  });
 });

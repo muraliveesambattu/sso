@@ -89,6 +89,16 @@ describe('testConnection.controller', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  test('trims and forwards company_id to the service for the tenant ownership check', async () => {
+    const req = mockReq({ protocol: 'oidc', tenant_id: 'tenant-1', company_id: ' company-7 ' });
+    const res = mockRes();
+    testConnection.mockResolvedValue({ success: true });
+
+    await handleTestConnection(req, res, jest.fn());
+
+    expect(testConnection).toHaveBeenCalledWith(expect.objectContaining({ company_id: 'company-7' }));
+  });
+
   test('passes service errors to next', async () => {
     const req = mockReq({ protocol: 'oidc', tenant_id: 'tenant-1' });
     const res = mockRes();
