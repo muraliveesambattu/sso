@@ -100,6 +100,14 @@ describe('ssoGateway', () => {
         expect(mockAxios).not.toHaveBeenCalled()
     })
 
+    test('blocks the SAML test result route (called directly by the console)', async () => {
+        for (const path of ['/auth/test-connection/saml/result', '/v1/auth/test-connection/saml/result']) {
+            const r = await call({ method: 'POST', path, originalUrl: path })
+            expect(r.statusCode).toBe(404)
+        }
+        expect(mockAxios).not.toHaveBeenCalled()
+    })
+
     // ---- preflight -----------------------------------------------------------
 
     test('OPTIONS preflight returns 204 without an Authorization header', async () => {

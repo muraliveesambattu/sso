@@ -46,8 +46,14 @@ const ALLOWED_PREFIXES = [
     '/v1/auth/admin/flags'
 ]
 
-// Public Entra redirect target — must not be reachable through the gateway.
-const BLOCKED_PATHS = ['/auth/test-connection/oidc/callback', '/v1/auth/test-connection/oidc/callback']
+// Public Entra redirect target and the popup result calls (sessionRef-protected, no admin
+// credential) — must not be reachable through the gateway; the console calls them directly.
+const BLOCKED_PATHS = [
+    '/auth/test-connection/oidc/callback',
+    '/v1/auth/test-connection/oidc/callback',
+    '/auth/test-connection/saml/result',
+    '/v1/auth/test-connection/saml/result'
+]
 
 const matchesPrefix = (pathname, prefixes) =>
     prefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))

@@ -73,4 +73,5 @@ This is the one runtime unknown; the health probe surfaces it immediately.
 Login/browser flows call the SSO service directly and must not go through the
 authenticated gateway:
 `/auth/domain-check`, `/auth/oidc/callback`, `/auth/oidc/token-exchange`,
-`/auth/callback` (SAML ACS), `/auth/test-connection/oidc/callback`.
+`/auth/callback` (SAML ACS), `/auth/test-connection/oidc/callback`,
+`/auth/test-connection/saml/result`.
