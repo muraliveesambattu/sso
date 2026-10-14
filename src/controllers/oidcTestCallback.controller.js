@@ -77,6 +77,15 @@ const fetchJson = (url, options) =>
     req.end();
   });
 
+// Summarises the signed-in admin's role/group claims for the test result.
+// Names/IDs only — never the raw token. `groupsOverage` means Entra omitted the
+// list (user is in too many groups); resolving it needs Graph, which the test skips.
+const summariseClaims = (claims) => ({
+  roles:         Array.isArray(claims.roles)  ? claims.roles  : [],
+  groups:        Array.isArray(claims.groups) ? claims.groups : [],
+  groupsOverage: !claims.groups && !!(claims._claim_names && claims._claim_names.groups),
+});
+
 const oidcTestCallbackController = async (req, res, next) => {
   try {
     const { code, state, sessionRef } = req.body;
@@ -185,6 +194,7 @@ const oidcTestCallbackController = async (req, res, next) => {
       data: {
         protocol:   'oidc',
         sso_status: 'active',
+        claims:     summariseClaims(tokenClaims),
       },
     });
   } catch (err) {

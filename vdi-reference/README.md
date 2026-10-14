@@ -1,0 +1,29 @@
+# VDI reference copies (transcribed from screenshots)
+
+These files were typed out from screenshots of the MDNA-Console workspace on the
+VDI (2026-10-13), because the VDI files cannot be copied to this machine.
+
+- They are **not** the real files. A misread character or a missed line is possible.
+  Diff against the VDI file before relying on any detail.
+- Whitespace and line wrapping may differ from the originals. Line numbers match the
+  VDI editor where the whole file was visible.
+- They are reference only: nothing here is imported or run, and `package.json`'s jest
+  config ignores `vdi-reference/`.
+
+| File | Lines on VDI | Coverage |
+|---|---|---|
+| `mdna-console/src/hooks/useTestConnection.js` | 232 | complete |
+| `mdna-console/src/views/auth-views/authentication/oidc-callback/index.js` | 196 | complete |
+| `mdna-console/src/views/user-views/myServices/sso/components/OidcConfigForm.js` | 188 | complete |
+| `mdna-console/src/views/user-views/myServices/sso/components/TestConnectionPanel.js` | 58+ | lines 1-58 only; the tail (likely `export default TestConnectionPanel`) was not seen |
+| `mdna-console/src/views/user-views/myServices/sso/sso-integration-card-service.js` | 530 | complete |
+| `mdna-console/src/constants/SsoConstants.js` | 33 | complete |
+| `mdna-console/src/layouts/auth-layout/index.js` | 16 | complete |
+| `mdna-console/src/views/auth-views/index.js` | 59+ | lines 1-58 only; the tail (likely `export default`) was not seen |
+
+Checked: for every file, key landmarks (function and export lines) fall on the same line
+numbers as in the VDI editor, so no whole lines were dropped or added. Character-level
+accuracy was not verified.
+
+Not captured: `AuthProvider`, `FirebaseAuth`, `ssoApi.js` (VDI version), top-level routing
+(`Views` / `App.js`), `firebase.json` rewrites, `SamlConfigForm.js`.

@@ -1,0 +1,33 @@
+export const REDIRECT_URI   = process.env.REACT_APP_OIDC_REDIRECT_URI;
+export const SAML_ACS_URL    = process.env.REACT_APP_SAML_ACS_URL;
+export const SAML_ENTITY_ID = process.env.REACT_APP_SAML_ENTITY_ID;
+
+export const API_BASE       = '';
+export const API_BASE_GATEWAY = process.env.REACT_APP_SSO_API_BASE_GATEWAY ?? '';
+
+export const AUTH_METHOD_MAP = {
+  secret:      'client_secret_post',
+  certificate: 'private_key_jwt',
+  none:        'none',
+};
+export const FILE_FIELDS = ['certificate', 'saml_cert', 'saml_signing_cert'];
+
+export const PROTOCOL_RESET_FIELDS = [
+  'auth_method', 'client_id', 'tenant_id', 'client_secret', 'entra_domain',
+  'certificate', 'certificate_password', 'entity_id', 'acs_url', 'sso_url',
+  'saml_cert', 'sign_auth', 'saml_signing_cert', 'saml_signing_cert_password',
+];
+export const IDP_RESET_FIELDS = [
+  'protocol', 'auth_method', 'client_id', 'tenant_id', 'client_secret',
+  'entra_domain', 'certificate', 'certificate_password', 'entity_id',
+  'acs_url', 'sso_url', 'saml_cert', 'sign_auth',
+];
+
+// SSO field format validators
+export const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const FQDN =
+  /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.[a-z]{2,})+$/;
+export const HTTPS =  /^https:\/\/.+/;
+export const PEM_BODY =
+  /^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----$/;

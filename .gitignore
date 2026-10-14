@@ -36,7 +36,6 @@ sso_Integration/.env.local
 # ── Excluded from the SSO microservice branch (non-service content) ──
 zdna-functions/
 sso_Integration/
-vdi-reference/
 public/
 certs/
 *.zip

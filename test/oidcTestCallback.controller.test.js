@@ -186,9 +186,49 @@ describe('oidcTestCallback.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: { protocol: 'oidc', sso_status: 'active' },
+      data: {
+        protocol: 'oidc',
+        sso_status: 'active',
+        claims: { roles: [], groups: [], groupsOverage: false },
+      },
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  const runSuccessWithClaims = async (extraClaims) => {
+    const res = mockRes();
+    tcStore.consume.mockReturnValue({
+      tenant_id: 'tenant-5',
+      client_id: 'client-5',
+      client_auth_method: 'client_secret',
+      client_secret: 'secret',
+      redirect_uri: 'http://localhost/callback',
+      state: 'state-5',
+      nonce: 'nonce-5',
+    });
+    mockHttpsResponse(() => ({
+      statusCode: 200,
+      body: JSON.stringify({ id_token: 'id-token' }),
+    }));
+    decodeJwt.mockReturnValue({ payload: { nonce: 'nonce-5', email: 'user@example.com', ...extraClaims } });
+    verifyJwtSignature.mockResolvedValue(undefined);
+
+    await oidcTestCallbackController(
+      mockReq({ code: 'code-6', state: 'state-5', sessionRef: 'session-6' }),
+      res,
+      jest.fn()
+    );
+    return res.json.mock.calls[0][0];
+  };
+
+  test('returns roles and groups from the id_token claims', async () => {
+    const body = await runSuccessWithClaims({ roles: ['Zebra.Admin'], groups: ['g1'] });
+    expect(body.data.claims).toEqual({ roles: ['Zebra.Admin'], groups: ['g1'], groupsOverage: false });
+  });
+
+  test('flags group overage when Entra omits the groups list', async () => {
+    const body = await runSuccessWithClaims({ _claim_names: { groups: 'src1' } });
+    expect(body.data.claims).toEqual({ roles: [], groups: [], groupsOverage: true });
   });
 
   test('passes unexpected errors to next', async () => {
