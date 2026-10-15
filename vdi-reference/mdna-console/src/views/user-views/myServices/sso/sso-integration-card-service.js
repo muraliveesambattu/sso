@@ -92,6 +92,70 @@ LoadingCard.propTypes = {
   text: PropTypes.string.isRequired,
 };
 
+// Levenshtein distance — spots typos in role values against the roles in the test login.
+const editDistance = (a, b) => {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+};
+
+// `role`-source rows: a value that is not one of the roles in the admin's test login but is a
+// near-miss of one (distance <= 2) is almost certainly a typo ("Zebra.Adm" vs "Zebra.Admin").
+// Values matching nothing are returned as `unmatched` (warning only, never blocks).
+const checkRoleValues = (mappings, loginRoles) => {
+  const errors = {};
+  const unmatched = [];
+  mappings.forEach((m, idx) => {
+    if (String(m.mapping_source || '').trim().toLowerCase() !== 'role') return;
+    const value = String(m.mapping_value || '').trim();
+    if (!value) return;
+    const lower = value.toLowerCase();
+    if (loginRoles.some((r) => r.toLowerCase() === lower)) return;
+    if (loginRoles.some((r) => editDistance(r.toLowerCase(), lower) <= 2)) {
+      errors[idx] = `"${value}" is not a role in your login. Roles in your login: ${loginRoles.join(', ')}.`;
+    } else {
+      unmatched.push(value);
+    }
+  });
+  return { errors, unmatched };
+};
+
+// Claim names the console treats specially — always valid, even if the admin's token lacks them
+// (department/jobtitle come from Graph at login; group/role are aliases of groups/roles).
+const BUILTIN_CLAIM_NAMES = ['role', 'group', 'department', 'jobtitle', 'default'];
+
+// Checks each Claim Name (comma-separated allowed) against the built-ins plus the claim NAMES in the
+// admin's test login. A near-miss or truncation of a valid name ("ro" for "role") is an error;
+// a name matching nothing and not close is returned in `unmatched` (warning only, never blocks).
+// Short names (< 4 chars) never use the edit-distance rule, to avoid false positives.
+const checkClaimNames = (mappings, tokenNames) => {
+  const valid = [...new Set([...BUILTIN_CLAIM_NAMES, ...tokenNames.map((n) => n.toLowerCase())])];
+  const errors = {};
+  const unmatched = [];
+  mappings.forEach((m, idx) => {
+    String(m.mapping_source || '').split(',').map((n) => n.trim()).filter(Boolean).forEach((name) => {
+      const lower = name.toLowerCase();
+      if (valid.includes(lower)) return;
+      const nearMiss = valid.some((v) =>
+        v.length >= 4 && ((lower.length >= 2 && v.startsWith(lower)) || (lower.length >= 4 && editDistance(v, lower) <= 2))
+      );
+      if (nearMiss) {
+        if (!errors[idx]) {
+          errors[idx] = `Claim name "${name}" is not a claim in your login. Claims in your login: ${tokenNames.join(', ')}. Built-in names: ${BUILTIN_CLAIM_NAMES.join(', ')}.`;
+        }
+      } else if (!unmatched.includes(name)) {
+        unmatched.push(name);
+      }
+    });
+  });
+  return { errors, unmatched };
+};
+
 const SsoIntegrationPage = () => {
   const [form] = Form.useForm();
   const [savedConfig, setSavedConfig] = useState(null);
@@ -293,13 +357,27 @@ const SsoIntegrationPage = () => {
   const handleAuthMethodChangeWithReset = (val) =>
     handleAuthMethodChange(val, () => { setTestPassed(false); setTestResult(null); });
 
-  const mappingErrors = jitEnabled ? allMappingErrors : {};
   const usesRoleSource = jitEnabled && jitMappings.some(
     (m) => String(m.mapping_source || '').trim().toLowerCase() === 'role'
   );
-  const hasLoginRoles = (testResult?.claims?.roles?.length ?? 0) > 0;
+  const loginRoles = testResult?.claims?.roles ?? [];
+  const hasLoginRoles = loginRoles.length > 0;
   const needsLoginRoles = usesRoleSource && !hasLoginRoles;
-  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles;
+  const roleCheck = usesRoleSource && hasLoginRoles ? checkRoleValues(jitMappings, loginRoles) : { errors: {}, unmatched: [] };
+  // Claim-name check needs the names the backend returns with the test (OIDC only; absent → check skipped)
+  const tokenNames = Array.isArray(testResult?.claims?.names) ? testResult.claims.names : null;
+  const claimCheck = jitEnabled && testPassed && tokenNames ? checkClaimNames(jitMappings, tokenNames) : { errors: {}, unmatched: [] };
+  // existing validation messages win, then the claim-name message, then the role-value message
+  const mappingErrors = jitEnabled
+    ? {
+        ...roleCheck.errors,
+        ...claimCheck.errors,
+        ...Object.fromEntries(Object.entries(allMappingErrors).filter(([, msg]) => msg)),
+      }
+    : {};
+  const hasRoleTypo = Object.keys(roleCheck.errors).length > 0;
+  const hasClaimNameTypo = Object.keys(claimCheck.errors).length > 0;
+  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles && !hasRoleTypo && !hasClaimNameTypo;
 
   const handleEdit = () => {
     const cfg = savedConfig;
@@ -492,7 +570,19 @@ const SsoIntegrationPage = () => {
             {testPassed
               ? 'Mandatory Steps must be completed before activation*'
               : 'Test Connection must pass before activation*'}
-            {testPassed && needsLoginRoles && (
+            {testPassed && claimCheck.unmatched.length > 0 && (
+              <span id="jit-claims-warning" style={{ display: 'block', color: '#d48806' }}>
+                Not among the claims in your login: {claimCheck.unmatched.join(', ')}.
+                This is fine for a custom claim that your login doesn't carry; otherwise check the spelling.
+              </span>
+            )}
+            {testPassed && roleCheck.unmatched.length > 0 && (
+              <span id="jit-roles-warning" style={{ display: 'block', color: '#d48806' }}>
+                Not among the roles in your login ({loginRoles.join(', ')}): {roleCheck.unmatched.join(', ')}.
+                Check the spelling, or ignore this if you don't hold those roles.
+              </span>
+            )}
+            {testPassed && testResult?.status === 'passed' && needsLoginRoles && (
               <span id="jit-roles-hint" style={{ display: 'block', color: '#ff4d4f' }}>
                 No roles were returned in your login. Assign an app role to your account in Entra, then test again.
               </span>

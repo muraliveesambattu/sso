@@ -189,7 +189,7 @@ describe('oidcTestCallback.controller', () => {
       data: {
         protocol: 'oidc',
         sso_status: 'active',
-        claims: { roles: [], groups: [], groupsOverage: false },
+        claims: { roles: [], groups: [], groupsOverage: false, names: ['nonce', 'email'] },
       },
     });
     expect(next).not.toHaveBeenCalled();
@@ -223,12 +223,24 @@ describe('oidcTestCallback.controller', () => {
 
   test('returns roles and groups from the id_token claims', async () => {
     const body = await runSuccessWithClaims({ roles: ['Zebra.Admin'], groups: ['g1'] });
-    expect(body.data.claims).toEqual({ roles: ['Zebra.Admin'], groups: ['g1'], groupsOverage: false });
+    expect(body.data.claims).toEqual({
+      roles: ['Zebra.Admin'], groups: ['g1'], groupsOverage: false,
+      names: ['nonce', 'email', 'roles', 'groups'],
+    });
   });
 
   test('flags group overage when Entra omits the groups list', async () => {
     const body = await runSuccessWithClaims({ _claim_names: { groups: 'src1' } });
-    expect(body.data.claims).toEqual({ roles: [], groups: [], groupsOverage: true });
+    expect(body.data.claims).toEqual({
+      roles: [], groups: [], groupsOverage: true,
+      names: ['nonce', 'email', '_claim_names'],
+    });
+  });
+
+  test('returns claim names but never claim values', async () => {
+    const body = await runSuccessWithClaims({ preferred_username: 'secret.person@example.com' });
+    expect(body.data.claims.names).toEqual(expect.arrayContaining(['email', 'preferred_username']));
+    expect(JSON.stringify(body.data.claims)).not.toContain('example.com');
   });
 
   test('passes unexpected errors to next', async () => {

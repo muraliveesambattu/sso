@@ -78,12 +78,15 @@ const fetchJson = (url, options) =>
   });
 
 // Summarises the signed-in admin's role/group claims for the test result.
-// Names/IDs only — never the raw token. `groupsOverage` means Entra omitted the
-// list (user is in too many groups); resolving it needs Graph, which the test skips.
+// Names/IDs only — never the raw token. `names` is the list of claim NAMES in the token
+// (never values), so the console can check a mapping's Claim Name against them.
+// `groupsOverage` means Entra omitted the list (user is in too many groups); resolving
+// it needs Graph, which the test skips.
 const summariseClaims = (claims) => ({
   roles:         Array.isArray(claims.roles)  ? claims.roles  : [],
   groups:        Array.isArray(claims.groups) ? claims.groups : [],
   groupsOverage: !claims.groups && !!(claims._claim_names && claims._claim_names.groups),
+  names:         Object.keys(claims),
 });
 
 const oidcTestCallbackController = async (req, res, next) => {
