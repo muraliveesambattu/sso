@@ -34,6 +34,13 @@
         }
       },
       {
+        "source": "/auth/test-connection/saml/result",
+        "run": {
+          "serviceId": "${SSO_SERVICE}",
+          "region": "${REGION}"
+        }
+      },
+      {
         "source": "/auth/oidc/token-exchange",
         "run": {
           "serviceId": "${SSO_SERVICE}",

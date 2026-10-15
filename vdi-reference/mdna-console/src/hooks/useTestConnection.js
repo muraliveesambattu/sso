@@ -5,7 +5,7 @@ import {
   SAML_ENTITY_ID,
   REDIRECT_URI,
 } from '../constants/SsoConstants';
-import { testConnectionApi, testConnectionCallbackApi } from '../services/ssoApi';
+import { testConnectionApi, testConnectionCallbackApi, testSamlResultApi } from '../services/ssoApi';
 import { getTenantId } from 'auth/FirebaseAuth';
 import { AuthContext } from 'auth/AuthProvider';
 
@@ -68,6 +68,7 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
     localStorage.removeItem('tc_oidc_code');
     localStorage.removeItem('tc_oidc_state');
     localStorage.removeItem('oidc_company_id');
+    localStorage.removeItem('tc_saml_done');
     try {
       const values = form.getFieldsValue();
       const samlCertB64 = fileValues.saml_cert ? await readFileAsBase64(fileValues.saml_cert) : undefined;
@@ -110,9 +111,68 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
       }
 
       if (protocol === 'saml') {
-        setTestResult({ status: 'passed', message: data.message || 'Test Connection successful' });
-        setTestPassed(true);
-        setIsTestReady(true);
+        const samlRef = data.data?.sessionRef;
+        const samlUrl = data.data?.redirectUrl;
+        if (!samlRef || !samlUrl) {   // no real-login test available: keep the metadata-only pass
+          setTestResult({ status: 'passed', message: data.message || 'Test Connection successful' });
+          setTestPassed(true);
+          setIsTestReady(true);
+          return;
+        }
+        localStorage.setItem('tc_company_id', payload.company_id);
+        localStorage.setItem('tc_session_ref', samlRef);
+        const samlPopup = window.open(samlUrl, '_blank', 'width=500,height=600,left=200,top=100');
+        if (!samlPopup || samlPopup.closed) {
+          localStorage.removeItem('tc_company_id');
+          localStorage.removeItem('tc_session_ref');
+          setTestResult({ status: 'failed', message: 'Popup was blocked. Please allow popups for this site and try again.' });
+          setTestPassed(false);
+          return;
+        }
+        const pollSaml = async () => {
+          const tcResult = localStorage.getItem('tc_result');
+          if (tcResult) {   // the callback page reported an error before the result step
+            setTestResult({ status: 'failed', message: JSON.parse(tcResult).message || 'Test Connection failed.' });
+            setTestPassed(false);
+            cleanupPopupFlow(samlPopup, popupCheckRef.current);
+            return;
+          }
+          if (localStorage.getItem('tc_saml_done')) {
+            clearInterval(popupCheckRef.current);
+            popupCheckRef.current = null;
+            localStorage.removeItem('tc_saml_done');
+            localStorage.removeItem('tc_company_id');
+            localStorage.removeItem('tc_session_ref');
+            try {
+              let res = await testSamlResultApi({ sessionRef: samlRef });
+              for (let i = 0; i < 5 && res.data?.pending; i++) {   // callback still running: wait briefly
+                await new Promise((r) => setTimeout(r, 500));
+                res = await testSamlResultApi({ sessionRef: samlRef });
+              }
+              if (!res.ok || !res.data?.success || res.data?.pending) {
+                setTestResult({ status: 'failed', message: res.data?.error?.message || 'Test Connection failed.' });
+                setTestPassed(false);
+              } else {
+                setTestResult({ status: 'passed', message: 'Test Connection successful', claims: res.data.data?.claims });
+                setTestPassed(true);
+                setIsTestReady(true);
+              }
+            } catch (err) {
+              setTestResult({ status: 'failed', message: err.message || 'Network error. Please try again.' });
+              setTestPassed(false);
+            }
+            try { samlPopup?.close(); } catch (e) { console.debug('Unable to close popup:', e); }
+            return;
+          }
+          if (samlPopup?.closed) {
+            cleanupPopupFlow(samlPopup, popupCheckRef.current);
+            setTestPassed((prev) => {
+              if (!prev) setTestResult({ status: 'failed', message: 'Test Connection cancelled. Please try again.' });
+              return prev;
+            });
+          }
+        };
+        popupCheckRef.current = setInterval(pollSaml, 500);
         return;
       }
 
