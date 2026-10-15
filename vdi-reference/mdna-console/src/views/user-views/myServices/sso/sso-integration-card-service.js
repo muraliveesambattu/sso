@@ -537,7 +537,7 @@ const SsoIntegrationPage = () => {
                 Check the spelling, or ignore this if you don't hold those roles.
               </span>
             )}
-            {testPassed && needsLoginRoles && (
+            {testPassed && testResult?.status === 'passed' && needsLoginRoles && (
               <span id="jit-roles-hint" style={{ display: 'block', color: '#ff4d4f' }}>
                 No roles were returned in your login. Assign an app role to your account in Entra, then test again.
               </span>
