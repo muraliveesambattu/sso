@@ -89,6 +89,29 @@ const summariseClaims = (claims) => ({
   names:         Object.keys(claims),
 });
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// All enabled, user-assignable app roles defined on the app registration. Needs the delegated
+// Application.Read.All permission consented in Entra; any failure just yields null (test still passes).
+const fetchAppRoles = async (accessToken, clientId) => {
+  if (process.env.TEST_READ_APP_ROLES !== 'true' || !accessToken || !GUID_RE.test(clientId)) return null;
+  const url = microsoft.graphApplication(clientId);
+  if (!microsoft.isAllowedUrl(url)) return null;
+  try {
+    const r = await fetchJson(url, { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } });
+    if (r.status !== 200 || !Array.isArray(r.body?.appRoles)) {
+      logger.warn('Test callback — app roles lookup failed', { action: 'test_callback_approles_failed', status: r.status });
+      return null;
+    }
+    return r.body.appRoles
+      .filter((a) => a.value && a.isEnabled !== false && (a.allowedMemberTypes || []).includes('User'))
+      .map((a) => ({ value: a.value, displayName: a.displayName }));
+  } catch (err) {
+    logger.warn('Test callback — app roles lookup error', { action: 'test_callback_approles_error', error: err.message });
+    return null;
+  }
+};
+
 const oidcTestCallbackController = async (req, res, next) => {
   try {
     const { code, state, sessionRef } = req.body;
@@ -191,13 +214,15 @@ const oidcTestCallbackController = async (req, res, next) => {
       email:  tokenClaims.email || tokenClaims.preferred_username,
     });
 
+    const appRoles = await fetchAppRoles(tokenRes.body.access_token, client_id);
+
     // Token exchange succeeded — test connection passed
     return res.status(200).json({
       success: true,
       data: {
         protocol:   'oidc',
         sso_status: 'active',
-        claims:     summariseClaims(tokenClaims),
+        claims:     { ...summariseClaims(tokenClaims), ...(appRoles && { appRoles }) },
       },
     });
   } catch (err) {

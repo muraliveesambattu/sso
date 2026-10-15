@@ -223,7 +223,8 @@ const buildOidcTestSession = async ({ tenant_id, client_id, client_secret, auth_
       client_id,
       sso_url:      ssoUrl,
       redirect_uri: callbackUri,
-      scope:        scope || 'openid profile email',
+      scope:        [scope || 'openid profile email', process.env.TEST_READ_APP_ROLES === 'true' && microsoft.graphAppRolesScope]
+                      .filter(Boolean).join(' '),
       state,
       nonce,
       ...(auth_method === 'none' && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),

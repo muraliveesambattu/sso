@@ -18,6 +18,8 @@ jest.mock('../src/utils/shared/testConnectionStore', () => ({
 jest.mock('../src/config/constants', () => ({
   microsoft: {
     tokenUrl: jest.fn((tenantId) => `https://token.example.test/${tenantId}`),
+    graphApplication: jest.fn((appId) => `https://graph.example.test/applications/${appId}`),
+    isAllowedUrl: jest.fn(() => true),
   },
 }));
 
@@ -241,6 +243,63 @@ describe('oidcTestCallback.controller', () => {
     const body = await runSuccessWithClaims({ preferred_username: 'secret.person@example.com' });
     expect(body.data.claims.names).toEqual(expect.arrayContaining(['email', 'preferred_username']));
     expect(JSON.stringify(body.data.claims)).not.toContain('example.com');
+  });
+
+  describe('app roles lookup (TEST_READ_APP_ROLES)', () => {
+    const GUID = '11111111-2222-3333-4444-555555555555';
+    afterEach(() => { delete process.env.TEST_READ_APP_ROLES; });
+
+    const run = async ({ flag, graph, clientId = GUID }) => {
+      if (flag) process.env.TEST_READ_APP_ROLES = 'true';
+      tcStore.consume.mockReturnValue({
+        tenant_id: 'tenant-g', client_id: clientId, client_auth_method: 'client_secret',
+        client_secret: 'secret', redirect_uri: 'http://localhost/cb', state: 'st', nonce: 'n',
+      });
+      const graphCalls = [];
+      mockHttpsResponse(({ url, options }) => {
+        if (String(url).includes('graph.example.test')) { graphCalls.push({ url, options }); return graph; }
+        return { statusCode: 200, body: JSON.stringify({ id_token: 'id-token', access_token: 'graph-token' }) };
+      });
+      decodeJwt.mockReturnValue({ payload: { nonce: 'n', email: 'user@example.com' } });
+      verifyJwtSignature.mockResolvedValue(undefined);
+      const res = mockRes();
+      await oidcTestCallbackController(mockReq({ code: 'c', state: 'st', sessionRef: 'ref' }), res, jest.fn());
+      return { body: res.json.mock.calls[0][0], graphCalls };
+    };
+
+    test('does not call Graph and returns no appRoles when the switch is off', async () => {
+      const { body, graphCalls } = await run({ flag: false, graph: { statusCode: 200, body: '{}' } });
+      expect(graphCalls).toHaveLength(0);
+      expect(body.data.claims.appRoles).toBeUndefined();
+    });
+
+    test('returns the enabled, user-assignable app roles when the switch is on', async () => {
+      const appRoles = [
+        { value: 'Zebra.Admin', displayName: 'Zebra Admin', isEnabled: true, allowedMemberTypes: ['User'] },
+        { value: 'Disabled.Role', displayName: 'Off', isEnabled: false, allowedMemberTypes: ['User'] },
+        { value: 'App.Only', displayName: 'App', isEnabled: true, allowedMemberTypes: ['Application'] },
+        { value: 'Zebra.Viewer', displayName: 'Viewer', allowedMemberTypes: ['User', 'Application'] },
+      ];
+      const { body, graphCalls } = await run({ flag: true, graph: { statusCode: 200, body: JSON.stringify({ appRoles }) } });
+      expect(graphCalls).toHaveLength(1);
+      expect(graphCalls[0].options.headers.Authorization).toBe('Bearer graph-token');
+      expect(body.data.claims.appRoles).toEqual([
+        { value: 'Zebra.Admin', displayName: 'Zebra Admin' },
+        { value: 'Zebra.Viewer', displayName: 'Viewer' },
+      ]);
+    });
+
+    test('still passes without appRoles when Graph denies the request', async () => {
+      const { body } = await run({ flag: true, graph: { statusCode: 403, body: JSON.stringify({ error: { code: 'Authorization_RequestDenied' } }) } });
+      expect(body.success).toBe(true);
+      expect(body.data.claims.appRoles).toBeUndefined();
+    });
+
+    test('does not call Graph when client_id is not a GUID', async () => {
+      const { graphCalls, body } = await run({ flag: true, clientId: "x')/../me", graph: { statusCode: 200, body: '{}' } });
+      expect(graphCalls).toHaveLength(0);
+      expect(body.success).toBe(true);
+    });
   });
 
   test('passes unexpected errors to next', async () => {
