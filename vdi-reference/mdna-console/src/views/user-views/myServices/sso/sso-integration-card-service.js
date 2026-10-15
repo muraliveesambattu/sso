@@ -92,6 +92,39 @@ LoadingCard.propTypes = {
   text: PropTypes.string.isRequired,
 };
 
+// Levenshtein distance — spots typos in role values against the roles in the test login.
+const editDistance = (a, b) => {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+};
+
+// `role`-source rows: a value that is not one of the roles in the admin's test login but is a
+// near-miss of one (distance <= 2) is almost certainly a typo ("Zebra.Adm" vs "Zebra.Admin").
+// Values matching nothing are returned as `unmatched` (warning only, never blocks).
+const checkRoleValues = (mappings, loginRoles) => {
+  const errors = {};
+  const unmatched = [];
+  mappings.forEach((m, idx) => {
+    if (String(m.mapping_source || '').trim().toLowerCase() !== 'role') return;
+    const value = String(m.mapping_value || '').trim();
+    if (!value) return;
+    const lower = value.toLowerCase();
+    if (loginRoles.some((r) => r.toLowerCase() === lower)) return;
+    if (loginRoles.some((r) => editDistance(r.toLowerCase(), lower) <= 2)) {
+      errors[idx] = `"${value}" is not a role in your login. Roles in your login: ${loginRoles.join(', ')}.`;
+    } else {
+      unmatched.push(value);
+    }
+  });
+  return { errors, unmatched };
+};
+
 const SsoIntegrationPage = () => {
   const [form] = Form.useForm();
   const [savedConfig, setSavedConfig] = useState(null);
@@ -293,13 +326,19 @@ const SsoIntegrationPage = () => {
   const handleAuthMethodChangeWithReset = (val) =>
     handleAuthMethodChange(val, () => { setTestPassed(false); setTestResult(null); });
 
-  const mappingErrors = jitEnabled ? allMappingErrors : {};
   const usesRoleSource = jitEnabled && jitMappings.some(
     (m) => String(m.mapping_source || '').trim().toLowerCase() === 'role'
   );
-  const hasLoginRoles = (testResult?.claims?.roles?.length ?? 0) > 0;
+  const loginRoles = testResult?.claims?.roles ?? [];
+  const hasLoginRoles = loginRoles.length > 0;
   const needsLoginRoles = usesRoleSource && !hasLoginRoles;
-  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles;
+  const roleCheck = usesRoleSource && hasLoginRoles ? checkRoleValues(jitMappings, loginRoles) : { errors: {}, unmatched: [] };
+  // existing validation messages win; the role message only fills rows that have none
+  const mappingErrors = jitEnabled
+    ? { ...allMappingErrors, ...Object.fromEntries(Object.entries(roleCheck.errors).filter(([i]) => !allMappingErrors[i])) }
+    : {};
+  const hasRoleTypo = Object.keys(roleCheck.errors).length > 0;
+  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles && !hasRoleTypo;
 
   const handleEdit = () => {
     const cfg = savedConfig;
@@ -492,6 +531,12 @@ const SsoIntegrationPage = () => {
             {testPassed
               ? 'Mandatory Steps must be completed before activation*'
               : 'Test Connection must pass before activation*'}
+            {testPassed && roleCheck.unmatched.length > 0 && (
+              <span id="jit-roles-warning" style={{ display: 'block', color: '#d48806' }}>
+                Not among the roles in your login ({loginRoles.join(', ')}): {roleCheck.unmatched.join(', ')}.
+                Check the spelling, or ignore this if you don't hold those roles.
+              </span>
+            )}
             {testPassed && needsLoginRoles && (
               <span id="jit-roles-hint" style={{ display: 'block', color: '#ff4d4f' }}>
                 No roles were returned in your login. Assign an app role to your account in Entra, then test again.
