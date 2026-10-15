@@ -125,6 +125,37 @@ const checkRoleValues = (mappings, loginRoles) => {
   return { errors, unmatched };
 };
 
+// Claim names the console treats specially — always valid, even if the admin's token lacks them
+// (department/jobtitle come from Graph at login; group/role are aliases of groups/roles).
+const BUILTIN_CLAIM_NAMES = ['role', 'group', 'department', 'jobtitle', 'default'];
+
+// Checks each Claim Name (comma-separated allowed) against the built-ins plus the claim NAMES in the
+// admin's test login. A near-miss or truncation of a valid name ("ro" for "role") is an error;
+// a name matching nothing and not close is returned in `unmatched` (warning only, never blocks).
+// Short names (< 4 chars) never use the edit-distance rule, to avoid false positives.
+const checkClaimNames = (mappings, tokenNames) => {
+  const valid = [...new Set([...BUILTIN_CLAIM_NAMES, ...tokenNames.map((n) => n.toLowerCase())])];
+  const errors = {};
+  const unmatched = [];
+  mappings.forEach((m, idx) => {
+    String(m.mapping_source || '').split(',').map((n) => n.trim()).filter(Boolean).forEach((name) => {
+      const lower = name.toLowerCase();
+      if (valid.includes(lower)) return;
+      const nearMiss = valid.some((v) =>
+        v.length >= 4 && ((lower.length >= 2 && v.startsWith(lower)) || (lower.length >= 4 && editDistance(v, lower) <= 2))
+      );
+      if (nearMiss) {
+        if (!errors[idx]) {
+          errors[idx] = `Claim name "${name}" is not a claim in your login. Claims in your login: ${tokenNames.join(', ')}. Built-in names: ${BUILTIN_CLAIM_NAMES.join(', ')}.`;
+        }
+      } else if (!unmatched.includes(name)) {
+        unmatched.push(name);
+      }
+    });
+  });
+  return { errors, unmatched };
+};
+
 const SsoIntegrationPage = () => {
   const [form] = Form.useForm();
   const [savedConfig, setSavedConfig] = useState(null);
@@ -333,12 +364,20 @@ const SsoIntegrationPage = () => {
   const hasLoginRoles = loginRoles.length > 0;
   const needsLoginRoles = usesRoleSource && !hasLoginRoles;
   const roleCheck = usesRoleSource && hasLoginRoles ? checkRoleValues(jitMappings, loginRoles) : { errors: {}, unmatched: [] };
-  // existing validation messages win; the role message only fills rows that have none
+  // Claim-name check needs the names the backend returns with the test (OIDC only; absent → check skipped)
+  const tokenNames = Array.isArray(testResult?.claims?.names) ? testResult.claims.names : null;
+  const claimCheck = jitEnabled && testPassed && tokenNames ? checkClaimNames(jitMappings, tokenNames) : { errors: {}, unmatched: [] };
+  // existing validation messages win, then the claim-name message, then the role-value message
   const mappingErrors = jitEnabled
-    ? { ...allMappingErrors, ...Object.fromEntries(Object.entries(roleCheck.errors).filter(([i]) => !allMappingErrors[i])) }
+    ? {
+        ...roleCheck.errors,
+        ...claimCheck.errors,
+        ...Object.fromEntries(Object.entries(allMappingErrors).filter(([, msg]) => msg)),
+      }
     : {};
   const hasRoleTypo = Object.keys(roleCheck.errors).length > 0;
-  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles && !hasRoleTypo;
+  const hasClaimNameTypo = Object.keys(claimCheck.errors).length > 0;
+  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles && !hasRoleTypo && !hasClaimNameTypo;
 
   const handleEdit = () => {
     const cfg = savedConfig;
@@ -531,6 +570,12 @@ const SsoIntegrationPage = () => {
             {testPassed
               ? 'Mandatory Steps must be completed before activation*'
               : 'Test Connection must pass before activation*'}
+            {testPassed && claimCheck.unmatched.length > 0 && (
+              <span id="jit-claims-warning" style={{ display: 'block', color: '#d48806' }}>
+                Not among the claims in your login: {claimCheck.unmatched.join(', ')}.
+                This is fine for a custom claim that your login doesn't carry; otherwise check the spelling.
+              </span>
+            )}
             {testPassed && roleCheck.unmatched.length > 0 && (
               <span id="jit-roles-warning" style={{ display: 'block', color: '#d48806' }}>
                 Not among the roles in your login ({loginRoles.join(', ')}): {roleCheck.unmatched.join(', ')}.
