@@ -111,21 +111,31 @@ const checkClaimNames = (mappings, tokenNames) => {
   return errors;
 };
 
-// Claim Value must be one the admin's test login actually carries, for the sources the login can
-// verify: `role` (roles claim) and `group` (when the group list was returned in full). Other sources
-// (department, jobtitle, custom claims) cannot be verified from the token and are not checked here.
-const checkClaimValues = (mappings, { roles = [], groups = [], groupsOverage = false }) => {
+// Claim Value must be one the test login can verify: for `role`, every role defined on the app in
+// Entra when the backend returned them (`appRoles`), otherwise the roles in the admin's own login;
+// for `group`, the groups in the login (when returned in full). Other sources (department, jobtitle,
+// custom claims) cannot be verified from the token and are not checked here.
+const checkClaimValues = (mappings, { roles = [], groups = [], groupsOverage = false, appRoles = null }) => {
+  const definedRoles = Array.isArray(appRoles) ? appRoles.map((r) => r.value) : [];
   const errors = {};
   mappings.forEach((m, idx) => {
     const source = String(m.mapping_source || '').trim().toLowerCase();
     const value = String(m.mapping_value || '').trim();
     if (!value) return;
     let known = null;
-    let label = '';
-    if (source === 'role' && roles.length > 0) { known = roles; label = 'role'; }
-    else if (source === 'group' && groups.length > 0 && !groupsOverage) { known = groups; label = 'group'; }
+    let message = '';
+    if (source === 'role' && definedRoles.length > 0) {
+      known = definedRoles;
+      message = `"${value}" is not a role defined for this app in Entra. Roles defined: ${known.join(', ')}.`;
+    } else if (source === 'role' && roles.length > 0) {
+      known = roles;
+      message = `"${value}" is not a role in your login. Roles in your login: ${known.join(', ')}.`;
+    } else if (source === 'group' && groups.length > 0 && !groupsOverage) {
+      known = groups;
+      message = `"${value}" is not a group in your login. Groups in your login: ${known.join(', ')}.`;
+    }
     if (!known || known.some((v) => v.toLowerCase() === value.toLowerCase())) return;
-    errors[idx] = `"${value}" is not a ${label} in your login. ${label === 'role' ? 'Roles' : 'Groups'} in your login: ${known.join(', ')}.`;
+    errors[idx] = message;
   });
   return errors;
 };
@@ -336,7 +346,8 @@ const SsoIntegrationPage = () => {
   );
   const loginRoles = testResult?.claims?.roles ?? [];
   const hasLoginRoles = loginRoles.length > 0;
-  const needsLoginRoles = usesRoleSource && !hasLoginRoles;
+  const hasAppRoles = (testResult?.claims?.appRoles?.length ?? 0) > 0;
+  const needsLoginRoles = usesRoleSource && !hasLoginRoles && !hasAppRoles;
   // Claim-name check needs the names the backend returns with the test (OIDC only; absent → check skipped)
   const tokenNames = Array.isArray(testResult?.claims?.names) ? testResult.claims.names : null;
   const nameErrors = jitEnabled && testPassed && tokenNames ? checkClaimNames(jitMappings, tokenNames) : {};
