@@ -8,8 +8,6 @@ const EMPTY_ROW = {
 
 const validateMappings = (rows) => {
   const errors = {};
-  const roleClaimMap = new Map();
-  const claimValueMap = new Map();
   rows.forEach((row, index) => {
     const role = row.zdna_role?.trim();
     const claimNames = row.mapping_source
@@ -24,28 +22,7 @@ const validateMappings = (rows) => {
     }
     if (!role || !claimNames?.length || !claimValue) {
       errors[index] = 'All fields (Role, Claim Name, Claim Value) are required';
-      return;
     }
-    claimNames.forEach((claimName) => {
-      const roleClaimKey = `${role}__${claimName}`;
-      if (roleClaimMap.has(roleClaimKey)) {
-        const prevIndex = roleClaimMap.get(roleClaimKey);
-        errors[index] = 'Same role must have different Claim Name';
-        errors[prevIndex] = 'Same role must have different Claim Name';
-      } else {
-        roleClaimMap.set(roleClaimKey, index);
-      }
-      const claimValueKey = `${claimName}__${claimValue}`;
-      if (claimValueMap.has(claimValueKey)) {
-        const prev = claimValueMap.get(claimValueKey);
-        if (prev.role !== role) {
-          errors[index] = 'Different roles with same Claim Name must have different Claim Value';
-          errors[prev.index] = 'Different roles with same Claim Name must have different Claim Value';
-        }
-      } else {
-        claimValueMap.set(claimValueKey, { role, index });
-      }
-    });
   });
   return errors;
 };

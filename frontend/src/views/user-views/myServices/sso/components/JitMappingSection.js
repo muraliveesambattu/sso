@@ -102,14 +102,14 @@ const JitMappingSection = ({
                     />
                   </Col>
                   <Col span={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {jitMappings.length > 1 && (
-                      <Button
-                        id='jit-mapping-remove-btn-active-view'
-                        type="text"
-                        onClick={() => onRemoveMapping(idx)}
-                        style={{ color: '#ff4d4f', padding: 0, minWidth: 'unset', lineHeight: 1 }}
-                      >✕</Button>
-                    )}
+                    <Button
+                      id='jit-mapping-remove-btn-active-view'
+                      type="text"
+                      onClick={() => (jitMappings.length > 1
+                        ? onRemoveMapping(idx)
+                        : ['zdna_role', 'mapping_source', 'mapping_value'].forEach((f) => onUpdateMapping(idx, f, '')))}
+                      style={{ color: '#ff4d4f', padding: 0, minWidth: 'unset', lineHeight: 1 }}
+                    >✕</Button>
                   </Col>
                 </Row>
                 {rowError && (

@@ -96,12 +96,11 @@ describe('useJitMappings — validation', () => {
     expect(result.current.isJitValid(true)).toBe(true);
   });
 
-  test('same role twice on the same claim name is rejected — both rows flagged', () => {
+  test('same role twice on the same claim name is allowed', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Admin', 'group', 'a', 'r1'), row('Admin', 'group', 'b', 'r2')])
     );
-    expect(result.current.mappingErrors[0]).toBe('Same role must have different Claim Name');
-    expect(result.current.mappingErrors[1]).toBe('Same role must have different Claim Name');
+    expect(result.current.mappingErrors).toEqual({});
   });
 
   test('same role on different claim names is allowed', () => {
@@ -111,12 +110,11 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('different roles sharing a claim name AND value is rejected — ambiguous mapping', () => {
+  test('different roles sharing a claim name AND value is allowed', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Admin', 'group', 'same', 'r1'), row('Viewer', 'group', 'same', 'r2')])
     );
-    expect(result.current.mappingErrors[0]).toMatch(/different Claim Value/);
-    expect(result.current.mappingErrors[1]).toMatch(/different Claim Value/);
+    expect(result.current.mappingErrors).toEqual({});
   });
 
   test('different roles sharing a claim name but different values is allowed', () => {
@@ -126,20 +124,18 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('claim names are comma-split and matched case-insensitively', () => {
+  test('same role repeating a claim name across rows is allowed', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Admin', 'GROUP, dept', 'x', 'r1'), row('Admin', 'group', 'y', 'r2')])
     );
-    // 'GROUP' from row 0 collides with 'group' from row 1 for the same role
-    expect(result.current.mappingErrors[0]).toBe('Same role must have different Claim Name');
-    expect(result.current.mappingErrors[1]).toBe('Same role must have different Claim Name');
+    expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('values are trimmed and compared case-insensitively', () => {
+  test('same value in different case across roles is allowed', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Admin', 'group', '  Same  ', 'r1'), row('Viewer', 'group', 'same', 'r2')])
     );
-    expect(result.current.mappingErrors[0]).toMatch(/different Claim Value/);
+    expect(result.current.mappingErrors).toEqual({});
   });
 
   test('isJitValid(false) short-circuits to true regardless of errors', () => {

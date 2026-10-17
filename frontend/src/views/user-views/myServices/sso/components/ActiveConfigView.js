@@ -279,7 +279,7 @@ const ActiveConfigView = ({
       </div>
 
       {/* ROLE MAPPINGS */}
-      {savedConfig.jitEnabled && savedConfig.jitMappings?.length > 0 && (
+      {savedConfig.jitEnabled && (
         <div
           style={{
             border: '1px solid #f0f0f0',
@@ -344,6 +344,12 @@ const ActiveConfigView = ({
               </Col>
             ))}
           </Row>
+
+          {!editingJit && !savedConfig.jitMappings?.length && (
+            <div id="role-mappings-empty" style={{ padding: '12px', fontSize: 13, color: '#8c8c8c' }}>
+              No role mappings configured. Click Manage roles to add one.
+            </div>
+          )}
 
           {(editingJit ? jitMappings : savedConfig.jitMappings).map((m, i) => (
             <Row
