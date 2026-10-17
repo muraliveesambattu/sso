@@ -50,8 +50,6 @@ const microsoft = {
   graphMemberOf: `${MS_GRAPH_BASE}/v1.0/me/memberOf?$select=id,securityEnabled`,
   graphMe:       `${MS_GRAPH_BASE}/v1.0/me?$select=department,jobTitle`,
   graphScope:    `${MS_GRAPH_BASE}/.default`,
-  graphAppRolesScope: `${MS_GRAPH_BASE}/Application.Read.All`,
-  graphApplication:   (appId) => `${MS_GRAPH_BASE}/v1.0/applications(appId='${encodeURIComponent(appId)}')?$select=appRoles`,
 
   // Issuer validation pattern for the OIDC `iss` claim (tenant-bound v2.0 issuer)
   issuerPattern: /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/v2\.0$/,

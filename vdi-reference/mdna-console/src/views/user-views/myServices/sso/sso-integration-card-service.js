@@ -92,54 +92,6 @@ LoadingCard.propTypes = {
   text: PropTypes.string.isRequired,
 };
 
-// Claim names the console treats specially — always valid, even if the admin's token lacks them
-// (department/jobtitle come from Graph at login; group/role are aliases of groups/roles).
-const BUILTIN_CLAIM_NAMES = ['role', 'group', 'department', 'jobtitle', 'default'];
-
-// Each Claim Name (comma-separated allowed) must be a built-in name or a claim NAME present in the
-// admin's test login. Anything else is an error that disables Save & Activate.
-const checkClaimNames = (mappings, tokenNames) => {
-  const valid = new Set([...BUILTIN_CLAIM_NAMES, ...tokenNames.map((n) => n.toLowerCase())]);
-  const errors = {};
-  mappings.forEach((m, idx) => {
-    const bad = String(m.mapping_source || '').split(',').map((n) => n.trim()).filter(Boolean)
-      .filter((name) => !valid.has(name.toLowerCase()));
-    if (bad.length) {
-      errors[idx] = `Claim name "${bad.join('", "')}" is not a claim in your login. Claims in your login: ${tokenNames.join(', ')}. Built-in names: ${BUILTIN_CLAIM_NAMES.join(', ')}.`;
-    }
-  });
-  return errors;
-};
-
-// Claim Value must be one the test login can verify: for `role`, every role defined on the app in
-// Entra when the backend returned them (`appRoles`), otherwise the roles in the admin's own login;
-// for `group`, the groups in the login (when returned in full). Other sources (department, jobtitle,
-// custom claims) cannot be verified from the token and are not checked here.
-const checkClaimValues = (mappings, { roles = [], groups = [], groupsOverage = false, appRoles = null }) => {
-  const definedRoles = Array.isArray(appRoles) ? appRoles.map((r) => r.value) : [];
-  const errors = {};
-  mappings.forEach((m, idx) => {
-    const source = String(m.mapping_source || '').trim().toLowerCase();
-    const value = String(m.mapping_value || '').trim();
-    if (!value) return;
-    let known = null;
-    let message = '';
-    if (source === 'role' && definedRoles.length > 0) {
-      known = definedRoles;
-      message = `"${value}" is not a role defined for this app in Entra. Roles defined: ${known.join(', ')}.`;
-    } else if (source === 'role' && roles.length > 0) {
-      known = roles;
-      message = `"${value}" is not a role in your login. Roles in your login: ${known.join(', ')}.`;
-    } else if (source === 'group' && groups.length > 0 && !groupsOverage) {
-      known = groups;
-      message = `"${value}" is not a group in your login. Groups in your login: ${known.join(', ')}.`;
-    }
-    if (!known || known.some((v) => v.toLowerCase() === value.toLowerCase())) return;
-    errors[idx] = message;
-  });
-  return errors;
-};
-
 const SsoIntegrationPage = () => {
   const [form] = Form.useForm();
   const [savedConfig, setSavedConfig] = useState(null);
@@ -341,27 +293,8 @@ const SsoIntegrationPage = () => {
   const handleAuthMethodChangeWithReset = (val) =>
     handleAuthMethodChange(val, () => { setTestPassed(false); setTestResult(null); });
 
-  const usesRoleSource = jitEnabled && jitMappings.some(
-    (m) => String(m.mapping_source || '').trim().toLowerCase() === 'role'
-  );
-  const loginRoles = testResult?.claims?.roles ?? [];
-  const hasLoginRoles = loginRoles.length > 0;
-  const hasAppRoles = (testResult?.claims?.appRoles?.length ?? 0) > 0;
-  const needsLoginRoles = usesRoleSource && !hasLoginRoles && !hasAppRoles;
-  // Claim-name check needs the names the backend returns with the test (OIDC only; absent → check skipped)
-  const tokenNames = Array.isArray(testResult?.claims?.names) ? testResult.claims.names : null;
-  const nameErrors = jitEnabled && testPassed && tokenNames ? checkClaimNames(jitMappings, tokenNames) : {};
-  const valueErrors = jitEnabled && testPassed && testResult?.claims ? checkClaimValues(jitMappings, testResult.claims) : {};
-  // existing validation messages win, then the claim-name message, then the claim-value message
-  const mappingErrors = jitEnabled
-    ? {
-        ...valueErrors,
-        ...nameErrors,
-        ...Object.fromEntries(Object.entries(allMappingErrors).filter(([, msg]) => msg)),
-      }
-    : {};
-  const hasInvalidClaims = Object.keys(nameErrors).length > 0 || Object.keys(valueErrors).length > 0;
-  const isSaveEnabled = testPassed && isJitValid(jitEnabled) && !needsLoginRoles && !hasInvalidClaims;
+  const mappingErrors = jitEnabled ? allMappingErrors : {};
+  const isSaveEnabled = testPassed && isJitValid(jitEnabled);
 
   const handleEdit = () => {
     const cfg = savedConfig;
@@ -554,11 +487,6 @@ const SsoIntegrationPage = () => {
             {testPassed
               ? 'Mandatory Steps must be completed before activation*'
               : 'Test Connection must pass before activation*'}
-            {testPassed && testResult?.status === 'passed' && needsLoginRoles && (
-              <span id="jit-roles-hint" style={{ display: 'block', color: '#ff4d4f' }}>
-                No roles were returned in your login. Assign an app role to your account in Entra, then test again.
-              </span>
-            )}
           </span>
           <div style={{ display: 'flex', gap: 8 ,flexWrap:'wrap'}}>
             <Button onClick={handleCancel} style={{ borderRadius: 6 }}>
