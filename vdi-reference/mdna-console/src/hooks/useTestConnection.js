@@ -61,7 +61,6 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
   const handleTestConnection = async () => {
     setTestLoading(true);
     setTestResult(null);
-    setTestPassed(false);
     localStorage.removeItem('tc_company_id');
     localStorage.removeItem('tc_session_ref');
     localStorage.removeItem('tc_result');
