@@ -125,6 +125,47 @@ describe('saveSsoConfig.controller', () => {
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
+  test('allows the owning organisation to change its domain list on the same tenant_id', async () => {
+    const req = mockReq({
+      protocol: 'oidc',
+      domains: ['pkce2310.com', 'pkce2210.com', 'pkce2110.co'],
+      tenant_id: 'tenant-shared',
+      company_id: 'owner-existing',
+    });
+    const res = mockRes();
+    const next = jest.fn();
+    getSsoIntegrationByEntraTenantId.mockResolvedValue({ company_id: 'owner-existing' });
+    getDomainsByCompanyId.mockResolvedValue(['pkce2310.com', 'pkce2210.com', 'pkce2110.com']);
+    saveSsoConfig.mockResolvedValue({ success: true, company_id: 'owner-existing' });
+
+    await handleSaveSsoConfig(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(saveSsoConfig).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  test('still blocks a different organisation that shares no domain with the registered tenant', async () => {
+    const req = mockReq({
+      protocol: 'oidc',
+      domains: ['pkce2310.com', 'new-domain.com'],
+      tenant_id: 'tenant-shared',
+      company_id: 'owner-new',
+    });
+    const res = mockRes();
+    const next = jest.fn();
+    getSsoIntegrationByEntraTenantId.mockResolvedValue({ company_id: 'other-co' });
+    getDomainsByCompanyId.mockResolvedValue(['someone-else.com']);
+
+    await handleSaveSsoConfig(req, res, next);
+
+    expect(saveSsoConfig).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 409,
+      code: 'TENANT_ALREADY_REGISTERED',
+    }));
+  });
+
   test('allows the JIT-mappings-only "Manage roles" quick save, which omits company_id entirely', async () => {
     // Real bug hit on EMC: ActiveConfigView's "Manage roles" save path sends
     // protocol/domains/tenant_id/jit_mappings but no company_id at all.

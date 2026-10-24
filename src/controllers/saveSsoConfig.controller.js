@@ -17,8 +17,8 @@ const toDomainArray = (v) => {
   return [...new Set(arr.map(d => trimStr(d)?.toLowerCase()).filter(Boolean))];
 };
 
-// Set equality helper for the tenant-conflict check below.
-const sameDomainSet = (a, b) => a.length === b.length && a.every(d => b.includes(d));
+// Overlap helper for the tenant-conflict check below.
+const sharesDomain = (a, b) => a.some(d => b.includes(d));
 
 const handleSaveSsoConfig = async (req, res, next) => {
   try {
@@ -44,16 +44,16 @@ const handleSaveSsoConfig = async (req, res, next) => {
 
     // An Entra tenant may only be claimed by one organisation — reject if a
     // DIFFERENT org already registered it. The same org re-saving/editing its
-    // own config with the same tenant_id is not a conflict. Compared against
-    // the tenant's registered `domains` set rather than company_id: not every
-    // save path includes company_id (e.g. the JIT-mappings-only quick save from
-    // "Manage roles" may omit it), but the verified domains are always present
-    // and are themselves the org's unique identity.
+    // own config (including changing its domains) is not a conflict. The owner
+    // is matched on company_id when sent; the "Manage roles" quick save omits
+    // it, so otherwise fall back to the saved domains sharing at least one
+    // domain with the request.
     if (tenant_id) {
       const existingTenant = await getSsoIntegrationByEntraTenantId(tenant_id);
       if (existingTenant) {
-        const existingDomains = await getDomainsByCompanyId(existingTenant.company_id);
-        if (!sameDomainSet(existingDomains, domains)) {
+        const sameOwner = Boolean(company_id) && existingTenant.company_id === company_id;
+        const existingDomains = sameOwner ? [] : await getDomainsByCompanyId(existingTenant.company_id);
+        if (!sameOwner && !sharesDomain(existingDomains, domains)) {
           throw Object.assign(
             new Error('This Microsoft Entra tenant ID is already registered by another organization.'),
             { statusCode: 409, code: 'TENANT_ALREADY_REGISTERED' }
