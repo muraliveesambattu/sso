@@ -133,6 +133,11 @@ export default function OIDCCallback() {
       const token = params.get('token');
       const error = params.get('error');
       const samlTest = params.get('saml_test') === '1';
+      if (samlTest) {   // SAML Test Connection popup: the parent tab polls the backend for the result
+        localStorage.setItem('tc_saml_done', '1');
+        globalThis.close();
+        return;
+      }
 
       const isPopup = !!localStorage.getItem('tc_session_ref')
         && !localStorage.getItem('oidc_company_id');
