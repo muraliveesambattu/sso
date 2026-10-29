@@ -66,6 +66,19 @@ describe('samlCallback.Controller', () => {
     expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?token=token%2B%2F%3D');
   });
 
+  test('redirects a SAML Test Connection callback to saml_test=1 without a token', async () => {
+    const req = mockReq({ SAMLResponse: 'response-4', RelayState: 'relay-4' });
+    const res = mockRes();
+    processSamlCallback.mockResolvedValue({ testSessionRef: 'ref-1' });
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(res.redirect).toHaveBeenCalledTimes(1);
+    expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?saml_test=1');
+    expect(res.redirect.mock.calls[0][0]).not.toContain('token=');
+    expect(res.redirect.mock.calls[0][0]).not.toContain('ref-1');
+  });
+
   test('redirects with the service error code on failure', async () => {
     const req = mockReq({ SAMLResponse: 'response-3', RelayState: 'relay-3' });
     const res = mockRes();
@@ -74,5 +87,15 @@ describe('samlCallback.Controller', () => {
     await samlCallbackController(req, res, jest.fn());
 
     expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?error=SAML_BAD');
+  });
+
+  test('falls back to SAML_LOGIN_FAILED when the error has no code', async () => {
+    const req = mockReq({ SAMLResponse: 'response-5', RelayState: 'relay-5' });
+    const res = mockRes();
+    processSamlCallback.mockRejectedValue(new Error('boom'));
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?error=SAML_LOGIN_FAILED');
   });
 });

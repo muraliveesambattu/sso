@@ -236,4 +236,144 @@ describe('samlCallback.service', () => {
       }),
     }));
   });
+
+  describe('SAML Test Connection callback', () => {
+    const ROLE_URI = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
+    const GROUPS_URI = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups';
+    const OVERAGE_URI = 'http://schemas.microsoft.com/claims/groups.link';
+
+    const attr = (name, values) =>
+      `<Attribute Name="${name}">${values.map((v) => `<AttributeValue>${v}</AttributeValue>`).join('')}</Attribute>`;
+
+    // Entra sends full claim URIs with no FriendlyName.
+    const buildTestXml = (attributes = '') => `<?xml version="1.0"?>
+      <Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" InResponseTo="req-123">
+        <Issuer xmlns="urn:oasis:names:tc:SAML:2.0:assertion">https://sts.windows.net/tenant-xyz/</Issuer>
+        <Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status>
+        <Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="assert-1">
+          <Subject><NameID>admin@example.com</NameID></Subject>
+          <AttributeStatement>
+            ${attr('http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress', ['admin@example.com'])}
+            ${attributes}
+          </AttributeStatement>
+        </Assertion>
+      </Response>`;
+
+    let stored;
+    beforeEach(() => {
+      stored = {
+        timestamp: fixedNow - 1000,
+        ssoContext: { company_id: undefined, acs_url: 'https://acs.example.com', entity_id: 'test-entity' },
+        test: {
+          sessionRef: 'ref-1',
+          certificate: 'unsaved-cert',
+          sso_url: 'https://login.microsoftonline.com/tenant-xyz/saml2',
+          entity_id: 'test-entity',
+          acs_url: 'https://acs.example.com',
+          result: null,
+        },
+      };
+      samlRequestStore.get.mockReturnValue(stored);
+    });
+
+    test('validates against the config under test and returns only the testSessionRef', async () => {
+      const result = await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(result).toEqual({ testSessionRef: 'ref-1' });
+      expect(validateStatus).toHaveBeenCalled();
+      expect(validateIssuer).toHaveBeenCalledWith(expect.any(Object), 'tenant-xyz');
+      expect(validateInResponseTo).toHaveBeenCalledWith(expect.any(Object), 'req-123');
+      expect(verifyXmlSignature).toHaveBeenCalledTimes(2);
+      expect(verifyXmlSignature).toHaveBeenNthCalledWith(1, expect.any(String), 'unsaved-cert');
+      expect(verifyXmlSignature).toHaveBeenNthCalledWith(2, expect.any(String), 'unsaved-cert');
+      expect(validateConditions).toHaveBeenCalled();
+      expect(validateAudience).toHaveBeenCalledWith(expect.any(Object), 'test-entity');
+    });
+
+    test('never touches the saved config, resolves no user, mints no token', async () => {
+      await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(getSamlConfig).not.toHaveBeenCalled();
+      expect(resolveUser).not.toHaveBeenCalled();
+      expect(generateCustomToken).not.toHaveBeenCalled();
+    });
+
+    test('keeps the store entry so the result endpoint can read it', async () => {
+      await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(samlRequestStore.delete).not.toHaveBeenCalled();
+    });
+
+    test('records a passing result with the email and full-URI role/group claims', async () => {
+      const xml = buildTestXml(attr(ROLE_URI, ['Zebra.Admin', 'Zebra.Viewer']) + attr(GROUPS_URI, ['g-1']));
+
+      await processSamlCallback(encodeSaml(xml), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result).toEqual({
+        success: true,
+        email: 'admin@example.com',
+        claims: { roles: ['Zebra.Admin', 'Zebra.Viewer'], groups: ['g-1'], groupsOverage: false },
+      });
+    });
+
+    test('reports empty claims when the login carries no roles or groups', async () => {
+      await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result.claims).toEqual({ roles: [], groups: [], groupsOverage: false });
+    });
+
+    test('flags group overage when Entra sends groups.link instead of groups', async () => {
+      const xml = buildTestXml(attr(OVERAGE_URI, ['https://graph.microsoft.com/v1.0/users/x/getMemberObjects']));
+
+      await processSamlCallback(encodeSaml(xml), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result.claims).toEqual({ roles: [], groups: [], groupsOverage: true });
+    });
+
+    test('records a failed result instead of throwing when the signature is invalid', async () => {
+      verifyXmlSignature.mockImplementationOnce(() => {
+        throw Object.assign(new Error('Invalid signature'), { code: 'INVALID_SIGNATURE' });
+      });
+
+      const result = await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(result).toEqual({ testSessionRef: 'ref-1' });
+      expect(stored.test.result).toEqual({ success: false, code: 'INVALID_SIGNATURE', message: 'Invalid signature' });
+    });
+
+    test('fails with INVALID_SSO_URL when the tested SSO URL has no tenant', async () => {
+      stored.test.sso_url = 'https://example.com/saml2';
+
+      await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result).toEqual(expect.objectContaining({ success: false, code: 'INVALID_SSO_URL' }));
+      expect(validateIssuer).not.toHaveBeenCalled();
+    });
+
+    test('fails with MISSING_ASSERTION when the response has no assertion', async () => {
+      const xml = `<?xml version="1.0"?><Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" InResponseTo="req-123"><Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status></Response>`;
+
+      await processSamlCallback(encodeSaml(xml), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result).toEqual(expect.objectContaining({ success: false, code: 'MISSING_ASSERTION' }));
+    });
+
+    test('falls back to SAML_TEST_FAILED when a validator error has no code', async () => {
+      validateAudience.mockImplementationOnce(() => { throw new Error('Audience mismatch'); });
+
+      await processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4');
+
+      expect(stored.test.result).toEqual({ success: false, code: 'SAML_TEST_FAILED', message: 'Audience mismatch' });
+    });
+
+    test('still enforces the 10-minute TTL before treating it as a test', async () => {
+      stored.timestamp = fixedNow - 700000;
+
+      await expect(processSamlCallback(encodeSaml(buildTestXml()), 'req-123', {}, '1.2.3.4')).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'SESSION_EXPIRED',
+      });
+      expect(stored.test.result).toBeNull();
+    });
+  });
 });

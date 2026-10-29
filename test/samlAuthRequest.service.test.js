@@ -107,4 +107,106 @@ describe('samlAuthRequest.service', () => {
     });
     service.samlRequestStore.clear();
   });
+
+  describe('SAML Test Connection', () => {
+    const ENTITY = 'https://sp.example.com/metadata';
+    const ACS = 'https://sp.example.com/callback';
+    const SSO = 'https://login.microsoftonline.com/tenant/saml2';
+    const testContext = {
+      sessionRef: 'ref-1',
+      certificate: 'cert-b64',
+      sso_url: SSO,
+      entity_id: ENTITY,
+      acs_url: ACS,
+    };
+
+    // The deflate mock prefixes the XML with "deflated:", so the SAMLRequest decodes straight back to it.
+    const decodeAuthnRequest = (redirectUrl) => {
+      const samlRequest = new URL(redirectUrl).searchParams.get('SAMLRequest');
+      return Buffer.from(samlRequest, 'base64').toString('utf8');
+    };
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('omits ForceAuthn by default and adds it when options.forceAuthn is set', async () => {
+      const { service } = loadSamlAuthRequestService();
+
+      const plain = await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 's-1');
+      const forced = await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 's-2', 'company-1', { forceAuthn: true });
+
+      expect(decodeAuthnRequest(plain)).not.toContain('ForceAuthn');
+      expect(decodeAuthnRequest(forced)).toContain('ForceAuthn="true"');
+      service.samlRequestStore.clear();
+    });
+
+    test('does not mark a normal login request as a test', async () => {
+      const { service } = loadSamlAuthRequestService();
+
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 's-1', 'company-1');
+
+      const entry = service.samlRequestStore.get('_zdna_request-uuid');
+      expect(entry.test).toBeUndefined();
+      expect(entry.ssoContext.company_id).toBe('company-1');
+      service.samlRequestStore.clear();
+    });
+
+    test('stores the testContext server-side with an empty result', async () => {
+      const { service } = loadSamlAuthRequestService();
+
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 'ref-1', undefined, { testContext, forceAuthn: true });
+
+      expect(service.samlRequestStore.get('_zdna_request-uuid').test).toEqual({ ...testContext, result: null });
+      service.samlRequestStore.clear();
+    });
+
+    test('takeSamlTestResult returns null for an unknown sessionRef', () => {
+      const { service } = loadSamlAuthRequestService();
+
+      expect(service.takeSamlTestResult('nope')).toBeNull();
+    });
+
+    test('takeSamlTestResult reports pending without consuming the entry', async () => {
+      const { service } = loadSamlAuthRequestService();
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 'ref-1', undefined, { testContext });
+
+      expect(service.takeSamlTestResult('ref-1')).toEqual({ pending: true });
+      expect(service.takeSamlTestResult('ref-1')).toEqual({ pending: true });
+      expect(service.samlRequestStore.has('_zdna_request-uuid')).toBe(true);
+      service.samlRequestStore.clear();
+    });
+
+    test('takeSamlTestResult returns a finished result once, then null', async () => {
+      const { service } = loadSamlAuthRequestService();
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 'ref-1', undefined, { testContext });
+      const result = { success: true, email: 'user@example.com', claims: { roles: [], groups: [], groupsOverage: false } };
+      service.samlRequestStore.get('_zdna_request-uuid').test.result = result;
+
+      expect(service.takeSamlTestResult('ref-1')).toEqual(result);
+      expect(service.takeSamlTestResult('ref-1')).toBeNull();
+      expect(service.samlRequestStore.size).toBe(0);
+    });
+
+    test('takeSamlTestResult drops and rejects an entry older than 10 minutes', async () => {
+      const { service } = loadSamlAuthRequestService();
+      const now = 1_000_000_000_000;
+      jest.spyOn(Date, 'now').mockReturnValue(now);
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 'ref-1', undefined, { testContext });
+
+      Date.now.mockReturnValue(now + 600001);
+
+      expect(service.takeSamlTestResult('ref-1')).toBeNull();
+      expect(service.samlRequestStore.size).toBe(0);
+    });
+
+    test('takeSamlTestResult ignores normal login entries', async () => {
+      const { service } = loadSamlAuthRequestService();
+      await service.buildSamlRedirectUrl(ENTITY, ACS, SSO, {}, 'ref-1', 'company-1');
+
+      expect(service.takeSamlTestResult('ref-1')).toBeNull();
+      expect(service.samlRequestStore.size).toBe(1);
+      service.samlRequestStore.clear();
+    });
+  });
 });
