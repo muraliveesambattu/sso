@@ -166,7 +166,7 @@ export const saveConfigApi = async (payload) =>
 export const getSsoConfig = async ({ domain, companyId }) => {
   const param = companyId
     ? `company_id=${encodeURIComponent(companyId)}`
-      : `domain=${encodeURIComponent(domain)}`;
+    : `domain=${encodeURIComponent(domain)}`;
   const res = await fetchWithRetry(
     `${API_BASE_GATEWAY}/auth/sso/config?${param}`,
     { method: 'GET', headers: await getAuthHeaders() },
