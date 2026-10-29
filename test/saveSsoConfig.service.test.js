@@ -164,7 +164,7 @@ describe('saveSsoConfig.service', () => {
     expect(result.company_id).toBe('noaq1xgCe5otm425Yhk3');
   });
 
-  test('passes the supplied company_id through, falling back to zdna-<domain>-<ts> without one', async () => {
+  test('passes the supplied company_id through, and passes none when the caller omits it', async () => {
     const { saveSsoConfig, pgSave } = loadService({
       getByDomainImpl: async () => null,
     });
@@ -181,7 +181,7 @@ describe('saveSsoConfig.service', () => {
       company_id: 'owner-tenant-42',
     }));
 
-    // No company_id supplied → legacy fallback keeps the PK non-null
+    // No company_id supplied → nothing is generated (the zdna-<domain>-<ts> fallback was removed)
     await saveSsoConfig({
       protocol: 'oidc',
       domains: 'no-owner.example.com',
@@ -189,9 +189,7 @@ describe('saveSsoConfig.service', () => {
       client_id: 'client-pg2',
       auth_method: 'client_secret_post',
     });
-    expect(pgSave).toHaveBeenLastCalledWith(expect.objectContaining({
-      company_id: 'zdna-no-owner-example-com-1700000000000',
-    }));
+    expect(pgSave.mock.calls[1][0].company_id).toBeUndefined();
   });
 
   test('hands OIDC fields (raw client_secret + jit rows) to the Postgres layer', async () => {
@@ -210,11 +208,10 @@ describe('saveSsoConfig.service', () => {
       jit_mappings: [{ mapping_source: 'default', zdna_role: 'role-manager' }],
     });
 
-    // The service derives company_id + entra_tenant_id and passes the secret
-    // through verbatim — encryption/defaults are postgresSSO.service's job.
+    // The service derives entra_tenant_id and passes the secret through
+    // verbatim — encryption/defaults are postgresSSO.service's job.
     // domains is lowercased and carried as an array (a company may own many).
     expect(savedRow(pgSave)).toEqual(expect.objectContaining({
-      company_id: 'zdna-example-com-1700000000000',
       domains: ['example.com'],
       protocol: 'oidc',
       entra_tenant_id: 'common',
@@ -311,10 +308,10 @@ describe('saveSsoConfig.service', () => {
     });
 
     expect(pgSave).toHaveBeenCalledWith(expect.objectContaining({
-      company_id: 'zdna-pg-example-com-1700000000000',
       domains: ['pg.example.com'],
       client_secret: 'pg-secret',
     }));
+    expect(pgSave.mock.calls[0][0].company_id).toBeUndefined();
     expect(getSsoIntegrationByDomain).toHaveBeenCalledWith('pg.example.com');
     expect(result.company_id).toBe('existing-company-id');
   });
