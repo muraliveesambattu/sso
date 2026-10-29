@@ -28,7 +28,7 @@ function resolveErrorMessage(code, fallback) {
 }
 
 // ── popup (test connection) handler ──────────────────────────────────────────
-function handlePopupFlow({ code, state, token, error }) {
+function handlePopupFlow({ code, state, token, error, samlTest }) {
   if (error) {
     localStorage.removeItem('tc_company_id');
     localStorage.removeItem('tc_session_ref');
@@ -36,6 +36,11 @@ function handlePopupFlow({ code, state, token, error }) {
       type: 'TEST_CONNECTION_FAILED',
       message: resolveErrorMessage(error, 'Sign-in failed.'),
     }));
+    globalThis.close();
+    return;
+  }
+  if (samlTest) {   // SAML Test Connection: only signal "done"; the parent fetches the result
+    localStorage.setItem('tc_saml_done', '1');
     globalThis.close();
     return;
   }
@@ -127,12 +132,18 @@ export default function OIDCCallback() {
       const state = params.get('state');
       const token = params.get('token');
       const error = params.get('error');
+      const samlTest = params.get('saml_test') === '1';
+      if (samlTest) {   // SAML Test Connection popup: the parent tab polls the backend for the result
+        localStorage.setItem('tc_saml_done', '1');
+        globalThis.close();
+        return;
+      }
 
       const isPopup = !!localStorage.getItem('tc_session_ref')
         && !localStorage.getItem('oidc_company_id');
 
       if (isPopup) {
-        handlePopupFlow({ code, state, token, error });
+        handlePopupFlow({ code, state, token, error, samlTest });
         return;
       }
 

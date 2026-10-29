@@ -75,3 +75,5 @@ TestConnectionPanel.propTypes = {
     }),
   }),
 };
+
+export default TestConnectionPanel;

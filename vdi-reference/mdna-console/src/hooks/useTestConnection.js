@@ -5,7 +5,7 @@ import {
   SAML_ENTITY_ID,
   REDIRECT_URI,
 } from '../constants/SsoConstants';
-import { testConnectionApi, testConnectionCallbackApi } from '../services/ssoApi';
+import { testConnectionApi, testConnectionCallbackApi, testSamlResultApi } from '../services/ssoApi';
 import { getTenantId } from 'auth/FirebaseAuth';
 import { AuthContext } from 'auth/AuthProvider';
 
@@ -67,6 +67,7 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
     localStorage.removeItem('tc_oidc_code');
     localStorage.removeItem('tc_oidc_state');
     localStorage.removeItem('oidc_company_id');
+    localStorage.removeItem('tc_saml_done');
     try {
       const values = form.getFieldsValue();
       const samlCertB64 = fileValues.saml_cert ? await readFileAsBase64(fileValues.saml_cert) : undefined;
@@ -109,9 +110,74 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
       }
 
       if (protocol === 'saml') {
-        setTestResult({ status: 'passed', message: data.message || 'Test Connection successful' });
-        setTestPassed(true);
-        setIsTestReady(true);
+        const samlRef = data.data?.sessionRef;
+        const samlUrl = data.data?.redirectUrl;
+        if (!samlRef || !samlUrl) {   // no real-login test available: keep the metadata-only pass
+          setTestResult({ status: 'passed', message: data.message || 'Test Connection successful' });
+          setTestPassed(true);
+          setIsTestReady(true);
+          return;
+        }
+        localStorage.setItem('tc_company_id', payload.company_id);
+        localStorage.setItem('tc_session_ref', samlRef);
+        const samlPopup = window.open(samlUrl, '_blank', 'width=500,height=600,left=200,top=100');
+        if (!samlPopup || samlPopup.closed) {
+          localStorage.removeItem('tc_company_id');
+          localStorage.removeItem('tc_session_ref');
+          setTestResult({ status: 'failed', message: 'Popup was blocked. Please allow popups for this site and try again.' });
+          setTestPassed(false);
+          return;
+        }
+        // Entra's login page sends Cross-Origin-Opener-Policy, which cuts this tab's link to the
+        // popup: samlPopup.closed reads true while the user is still signing in. So don't watch
+        // the popup. Ask the backend, which answers 202 (pending) until the ACS callback has run.
+        const SAML_TEST_TIMEOUT_MS = 5 * 60 * 1000;
+        const startedAt = Date.now();
+        let polling = false;
+        const finishSaml = () => {
+          clearInterval(popupCheckRef.current);
+          popupCheckRef.current = null;
+          ['tc_saml_done', 'tc_company_id', 'tc_session_ref', 'tc_result'].forEach((k) => localStorage.removeItem(k));
+          try { samlPopup?.close(); } catch (e) { console.debug('Unable to close popup:', e); }
+        };
+        const pollSaml = async () => {
+          if (polling) return;
+          polling = true;
+          try {
+            const tcResult = localStorage.getItem('tc_result');
+            if (tcResult) {   // the callback page reported an error (e.g. MISSING_SAML_RESPONSE)
+              finishSaml();
+              setTestResult({ status: 'failed', message: JSON.parse(tcResult).message || 'Test Connection failed.' });
+              setTestPassed(false);
+              return;
+            }
+            const res = await testSamlResultApi({ sessionRef: samlRef });
+            if (res.data?.pending) {
+              if (Date.now() - startedAt > SAML_TEST_TIMEOUT_MS) {
+                finishSaml();
+                setTestResult({ status: 'failed', message: 'Test Connection timed out. Please try again.' });
+                setTestPassed(false);
+              }
+              return;
+            }
+            finishSaml();
+            if (!res.ok || !res.data?.success) {
+              setTestResult({ status: 'failed', message: res.data?.error?.message || 'Test Connection failed.' });
+              setTestPassed(false);
+            } else {
+              setTestResult({ status: 'passed', message: 'Test Connection successful', claims: res.data.data?.claims });
+              setTestPassed(true);
+              setIsTestReady(true);
+            }
+          } catch (err) {
+            finishSaml();
+            setTestResult({ status: 'failed', message: err.message || 'Network error. Please try again.' });
+            setTestPassed(false);
+          } finally {
+            polling = false;
+          }
+        };
+        popupCheckRef.current = setInterval(pollSaml, 2000);
         return;
       }
 
