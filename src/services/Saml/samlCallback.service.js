@@ -1,10 +1,10 @@
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 const { logger } = require('../../config/logger');
 const { getSamlConfig } = require('../db/ssoDataService');
-const { verifyXmlSignature }   = require('../../utils/saml/samlSignature.util');
-const { samlRequestStore }     = require('./samlAuthRequest.service');
-const { resolveUser }          = require('../SSO/userResolution.service');
-const { resolvePermissions }   = require('../SSO/permissionResolver.service');
+const { verifyXmlSignature } = require('../../utils/saml/samlSignature.util');
+const { samlRequestStore } = require('./samlAuthRequest.service');
+const { resolveUser } = require('../SSO/userResolution.service');
+const { resolvePermissions } = require('../SSO/permissionResolver.service');
 const { generateCustomToken, getTenantFriendlyId } = require('../../utils/firebase/firebaseAdmin.util');
 const {
   validateStatus,
@@ -19,12 +19,12 @@ const SESSION_TTL_MS = 600000;
 // Extract ALL SAML attributes dynamically (no hardcoding)
 const extractAllAttributes = (assertion) => {
   const result = {};
-  
+
   // Extract NameID
   const nameId = assertion.getElementsByTagNameNS(
     'urn:oasis:names:tc:SAML:2.0:assertion', 'NameID'
   )[0];
-  
+
   if (nameId) {
     result.nameId = {
       value: nameId.textContent.trim(),
@@ -75,13 +75,13 @@ const extractSubject = (assertion) => {
   const subject = assertion.getElementsByTagNameNS(
     'urn:oasis:names:tc:SAML:2.0:assertion', 'Subject'
   )[0];
-  
+
   if (!subject) return null;
 
   const nameId = subject.getElementsByTagNameNS(
     'urn:oasis:names:tc:SAML:2.0:assertion', 'NameID'
   )[0];
-  
+
   const subjectConfirmation = subject.getElementsByTagNameNS(
     'urn:oasis:names:tc:SAML:2.0:assertion', 'SubjectConfirmation'
   )[0];
@@ -98,6 +98,62 @@ const extractSubject = (assertion) => {
     notOnOrAfter: subjectConfirmationData?.getAttribute('NotOnOrAfter') || null,
     inResponseTo: subjectConfirmationData?.getAttribute('InResponseTo') || null
   };
+};
+
+const SAML_ROLE_URI           = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
+const SAML_GROUPS_URI         = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups';
+const SAML_GROUPS_OVERAGE_URI = 'http://schemas.microsoft.com/claims/groups.link';
+
+const toArray = (v) => {
+  if (Array.isArray(v)) return v;
+  return v ? [v] : [];
+};
+
+// Same shape as the OIDC test result: { roles, groups, groupsOverage }.
+const summariseSamlClaims = (attrs) => {
+  const groups = toArray(attrs.groups || attrs[SAML_GROUPS_URI]);
+  return {
+    roles:         toArray(attrs.role || attrs.roles || attrs[SAML_ROLE_URI]),
+    groups,
+    groupsOverage: groups.length === 0 && !!attrs[SAML_GROUPS_OVERAGE_URI],
+  };
+};
+
+const samlTestError = (message, code) => Object.assign(new Error(message), { code });
+
+// Runs the same checks as a real login, against the config the admin is testing.
+// The outcome (pass or fail) is parked on the stored entry for the result endpoint;
+// nothing here throws to the ACS controller.
+const processSamlTestCallback = (xml, authnRequestId, storedSession) => {
+  const { test } = storedSession;
+  try {
+    const tenantMatch = /microsoftonline\.com\/([^/?]+)/.exec(test.sso_url || '');
+    if (!tenantMatch) throw samlTestError('SSO URL tenant not found', 'INVALID_SSO_URL');
+
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    if (doc.getElementsByTagName('parsererror')[0]) throw samlTestError('Invalid SAML XML structure', 'INVALID_XML');
+
+    validateStatus(doc);
+    validateIssuer(doc, tenantMatch[1]);
+    validateInResponseTo(doc, authnRequestId);
+    verifyXmlSignature(xml, test.certificate);
+
+    const assertion = doc.getElementsByTagNameNS('urn:oasis:names:tc:SAML:2.0:assertion', 'Assertion')[0];
+    if (!assertion) throw samlTestError('Missing Assertion element', 'MISSING_ASSERTION');
+    verifyXmlSignature(new XMLSerializer().serializeToString(assertion), test.certificate);
+    validateConditions(assertion);
+    validateAudience(assertion, test.entity_id);
+
+    const attrs = extractAllAttributes(assertion);
+    const email = attrs['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress']
+      || attrs.emailaddress || attrs.email || attrs.nameId?.value || null;
+
+    test.result = { success: true, email, claims: summariseSamlClaims(attrs) };
+  } catch (err) {
+    logger.warn('[SAML_TEST_CALLBACK_FAILED]', { code: err.code, error: err.message });
+    test.result = { success: false, code: err.code || 'SAML_TEST_FAILED', message: err.message };
+  }
+  return { testSessionRef: test.sessionRef };
 };
 
 const processSamlCallback = async (samlResponse, relayState, session, clientIp) => {
@@ -148,6 +204,12 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
     throw err;
   }
 
+  // Test Connection request (set server-side by buildSamlRedirectUrl): validate against the
+  // unsaved config, resolve no user, mint no token.
+  if (storedSession.test) {
+    return processSamlTestCallback(xml, authnRequestId, storedSession);
+  }
+
   const { ssoContext } = storedSession;
 
   // LAYER 6: Retrieve Certificate from the SSO store (NEVER expose to client)
@@ -187,7 +249,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const assertion = doc.getElementsByTagNameNS(
     'urn:oasis:names:tc:SAML:2.0:assertion', 'Assertion'
   )[0];
-  
+
   if (!assertion) {
     const err = new Error('Missing Assertion element');
     err.statusCode = 400;
@@ -210,7 +272,7 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const subject = extractSubject(assertion);
 
   // LAYER 13: Validate Required Claims (flexible lookup)
-  const email = allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'] 
+  const email = allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress']
     || allAttributes.emailaddress
     || allAttributes.email
     || allAttributes.nameId?.value
@@ -242,10 +304,6 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   // LAYER 15: Audit Log
   logger.debug('[SAML_LOGIN_SUCCESS]', JSON.stringify({
     timestamp: new Date().toISOString(),
-    oid,
-    email,
-    tenantId: allAttributes['http://schemas.microsoft.com/identity/claims/tenantid'] || allAttributes.tenantid,
-    clientIp,
     processingTimeMs: processingTime,
     sessionAge,
     protocol: 'saml'
@@ -256,8 +314,8 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
 
   // LAYER 17: Generate Firebase Custom Token
   // Use ZDNA user_id as Firebase UID
-  const zdnaTenantId = resolution.user.user_id;
-  logger.debug(`[SAML] Generating Firebase Custom Token | uid: ${zdnaTenantId} | email: ${email}`);
+  const zdnaTenantId = resolution.user.user_id || resolution.user.UUID;
+  logger.debug(`[SAML] Generating Firebase Custom Token `);
 
   // Resolve permissions (RMS when configured, else Firestore roleConfig)
   const resolvedPerms = await resolvePermissions(resolution.roles, resolution.user);
@@ -266,16 +324,16 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   const friendlyId = await getTenantFriendlyId(samlConfig.company_id);
 
   const customToken = await generateCustomToken(zdnaTenantId, {
-    email:       email,
-    role:        resolution.roles[0]?.role_name || 'user',
-    roles:       resolution.roles,
+    email: email,
+    role: resolution.roles[0]?.role_name || 'user',
+    roles: resolution.roles,
     permissions: resolvedPerms.permissions,
-    companyId:   samlConfig.company_id,
+    companyId: samlConfig.company_id,
     friendlyId,
     displayName: allAttributes['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
-                 || allAttributes.name
-                 || allAttributes.displayname
-                 || '',
+      || allAttributes.name
+      || allAttributes.displayname
+      || '',
   });
 
   logger.debug(`[SAML] Firebase Custom Token generated | uid: ${zdnaTenantId}`);
@@ -283,14 +341,14 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
   // LAYER 18: Return customToken + session metadata
   return {
     customToken,
-    user:       resolution.user,
-    roles:      resolution.roles,
+    user: resolution.user,
+    roles: resolution.roles,
     userAction: resolution.action,
     session: {
-      protocol:        'saml',
+      protocol: 'saml',
       processingTimeMs: processingTime,
-      sessionAge:       sessionAge,
-      validatedAt:      new Date().toISOString()
+      sessionAge: sessionAge,
+      validatedAt: new Date().toISOString()
     }
   };
 };

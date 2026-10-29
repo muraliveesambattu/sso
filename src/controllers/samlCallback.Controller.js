@@ -7,7 +7,7 @@ const FRONTEND_URL = defaults.FRONTEND_URL;
 const samlCallbackController = async (req, res, next) => {
   try {
     const { SAMLResponse, RelayState } = req.body;
-
+    logger.debug('[SAML] Callback received');
     // Input validation
     if (!SAMLResponse) {
       logger.warn('[SAML] Missing SAMLResponse in callback');
@@ -37,6 +37,12 @@ const samlCallbackController = async (req, res, next) => {
       clientIp
     );
 
+    // Test Connection: no token. The popup only signals "done"; the console already
+    // holds the sessionRef and fetches the result from the result endpoint.
+    if (result.testSessionRef) {
+      return res.redirect(`${FRONTEND_URL}/auth/oidc/callback?saml_test=1`);
+    }
+
     // Redirect to frontend with customToken in URL
     // Frontend oidc-callback component reads ?token= and calls signInWithCustomToken()
     logger.debug(`[SAML] Redirecting to frontend with customToken | uid: ${result.user?.user_id}`);
@@ -57,12 +63,12 @@ const samlCallbackController = async (req, res, next) => {
       relayState: req.body.RelayState
     }));
 
-    // Redirect to frontend with error
     return res.redirect(
       `${FRONTEND_URL}/auth/oidc/callback?error=${encodeURIComponent(err.code || 'SAML_LOGIN_FAILED')}`
     );
+
   }
 };
 
 
-module.exports = {samlCallbackController};
+module.exports = { samlCallbackController };
