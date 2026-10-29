@@ -100,6 +100,62 @@ const extractSubject = (assertion) => {
   };
 };
 
+const SAML_ROLE_URI           = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
+const SAML_GROUPS_URI         = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups';
+const SAML_GROUPS_OVERAGE_URI = 'http://schemas.microsoft.com/claims/groups.link';
+
+const toArray = (v) => {
+  if (Array.isArray(v)) return v;
+  return v ? [v] : [];
+};
+
+// Same shape as the OIDC test result: { roles, groups, groupsOverage }.
+const summariseSamlClaims = (attrs) => {
+  const groups = toArray(attrs.groups || attrs[SAML_GROUPS_URI]);
+  return {
+    roles:         toArray(attrs.role || attrs.roles || attrs[SAML_ROLE_URI]),
+    groups,
+    groupsOverage: groups.length === 0 && !!attrs[SAML_GROUPS_OVERAGE_URI],
+  };
+};
+
+const samlTestError = (message, code) => Object.assign(new Error(message), { code });
+
+// Runs the same checks as a real login, against the config the admin is testing.
+// The outcome (pass or fail) is parked on the stored entry for the result endpoint;
+// nothing here throws to the ACS controller.
+const processSamlTestCallback = (xml, authnRequestId, storedSession) => {
+  const { test } = storedSession;
+  try {
+    const tenantMatch = /microsoftonline\.com\/([^/?]+)/.exec(test.sso_url || '');
+    if (!tenantMatch) throw samlTestError('SSO URL tenant not found', 'INVALID_SSO_URL');
+
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    if (doc.getElementsByTagName('parsererror')[0]) throw samlTestError('Invalid SAML XML structure', 'INVALID_XML');
+
+    validateStatus(doc);
+    validateIssuer(doc, tenantMatch[1]);
+    validateInResponseTo(doc, authnRequestId);
+    verifyXmlSignature(xml, test.certificate);
+
+    const assertion = doc.getElementsByTagNameNS('urn:oasis:names:tc:SAML:2.0:assertion', 'Assertion')[0];
+    if (!assertion) throw samlTestError('Missing Assertion element', 'MISSING_ASSERTION');
+    verifyXmlSignature(new XMLSerializer().serializeToString(assertion), test.certificate);
+    validateConditions(assertion);
+    validateAudience(assertion, test.entity_id);
+
+    const attrs = extractAllAttributes(assertion);
+    const email = attrs['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress']
+      || attrs.emailaddress || attrs.email || attrs.nameId?.value || null;
+
+    test.result = { success: true, email, claims: summariseSamlClaims(attrs) };
+  } catch (err) {
+    logger.warn('[SAML_TEST_CALLBACK_FAILED]', { code: err.code, error: err.message });
+    test.result = { success: false, code: err.code || 'SAML_TEST_FAILED', message: err.message };
+  }
+  return { testSessionRef: test.sessionRef };
+};
+
 const processSamlCallback = async (samlResponse, relayState, session, clientIp) => {
   const startTime = Date.now();
 
@@ -146,6 +202,12 @@ const processSamlCallback = async (samlResponse, relayState, session, clientIp) 
     err.statusCode = 401;
     err.code = 'SESSION_EXPIRED';
     throw err;
+  }
+
+  // Test Connection request (set server-side by buildSamlRedirectUrl): validate against the
+  // unsaved config, resolve no user, mint no token.
+  if (storedSession.test) {
+    return processSamlTestCallback(xml, authnRequestId, storedSession);
   }
 
   const { ssoContext } = storedSession;

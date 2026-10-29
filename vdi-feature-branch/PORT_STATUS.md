@@ -27,7 +27,7 @@ Copy each file to the same path on the VDI. Then compare it with the VDI file (i
 | src/routers/sso.routes.js | waiting | pending |
 | src/services/SSO/testConnection.service.js | waiting | pending |
 | src/services/Saml/samlAuthRequest.service.js | waiting | pending |
-| src/services/Saml/samlCallback.service.js | waiting | pending |
+| src/services/Saml/samlCallback.service.js | done | done (+62) |
 | test/samlTestResult.controller.test.js | not needed (new file) | done (copied from Mac) |
 | test/samlAuthRequest.service.test.js | waiting | pending |
 | test/samlCallback.controller.test.js | waiting | pending |
