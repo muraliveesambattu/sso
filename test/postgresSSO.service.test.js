@@ -358,6 +358,9 @@ describe('postgresSSO.service', () => {
       // The admin's "sign AuthnRequest" choice is now persisted (was dropped).
       sign_authn_request: true,
     }), { transaction: mocks.transaction });
+    const samlRow = mocks.SamlConfiguration.upsert.mock.calls[0][0];
+    expect(samlRow).not.toHaveProperty('app_id');
+    expect(samlRow).not.toHaveProperty('client_secret_enc');
     expect(mocks.JitMapping.bulkCreate).not.toHaveBeenCalled();
 
     await service.updateUser('user-2', { last_login: '2026-06-26T00:00:00Z' });
@@ -375,7 +378,7 @@ describe('postgresSSO.service', () => {
       toJSON: () => ({ company_id: 'company-1', client_secret_enc: 'enc-secret', private_key_enc: 'enc-key', client_id: 'client-1' }),
     });
     mocks.SamlConfiguration.findOne.mockResolvedValue({
-      toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert', client_secret_enc: 'enc-saml' }),
+      toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert' }),
     });
     mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin', role_name: 'Admin' }) }]);
     mocks.SsoDomain.findAll.mockResolvedValue([{ domain: 'example.com' }]);
@@ -385,8 +388,6 @@ describe('postgresSSO.service', () => {
     expect(details.oidc_config.client_secret).toBe('dec:enc-secret');
     expect(details.oidc_config.client_secret_enc).toBeUndefined();
     expect(details.saml_config.sp_private_key_enc).toBeUndefined();
-    expect(details.saml_config.client_secret).toBeUndefined();
-    expect(details.saml_config.client_secret_enc).toBeUndefined();
     // role_name is stored on the mapping (no zdna_roles JOIN) so the console's
     // RMS-fed dropdown can pre-select the right option when a config is reopened.
     expect(details.jit_mappings[0]).toEqual(expect.objectContaining({ role_id: 'role-admin', role_name: 'Admin' }));

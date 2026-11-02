@@ -96,7 +96,6 @@ const getSamlConfig = async (companyId) => {
     ...data,
     entity_id: resolveEnvRef(data.entity_id),
     acs_url: resolveEnvRef(data.acs_url),
-    client_secret: data.client_secret_enc ? decrypt(data.client_secret_enc) : null,
     certificate: resolveSecret(data.certificate),
   };
 };
@@ -276,8 +275,8 @@ const upsertOidcConfig = async ({
 };
 
 const upsertSamlConfig = async ({
-  company_id, entity_id, sso_url, acs_url, client_secret, certificate,
-  cert_expiry, app_id, sign_auth, keep_existing_cert, keep_existing_signing_cert, sp_private_key_b64,
+  company_id, entity_id, sso_url, acs_url, certificate,
+  cert_expiry, sign_auth, keep_existing_cert, keep_existing_signing_cert, sp_private_key_b64,
 }, tx) => {
   logger.debug('[POSTGRES] upsertSamlConfig', {
     companyIdMasked: maskInput(String(company_id)),
@@ -308,17 +307,10 @@ const upsertSamlConfig = async ({
   }
   if (!sign_auth) resolvedPrivateKey = null;
 
-  const existingSaml = await SamlConfiguration.findOne({ where: { company_id }, transaction: tx });
-  const encryptedClientSecret = client_secret
-    ? encrypt(client_secret)
-    : existingSaml?.client_secret_enc || null;
-
   await SamlConfiguration.upsert({
     company_id,
     entity_id: entity_id || defaults.SAML_ENTITY_ID,
     sso_url,
-    app_id,
-    client_secret_enc: encryptedClientSecret,
     acs_url: acs_url || defaults.SAML_ACS_URL,
     certificate: resolvedCert,
     cert_expiry: cert_expiry || null,
@@ -357,7 +349,7 @@ const replaceJitMappings = async (company_id, jit_enabled, jit_mappings, tx) => 
 const saveSsoConfig = async ({
   company_id, protocol, idp, domains, tenant_id, entra_tenant_id,
   client_id, auth_method, client_secret, redirect_uri,
-  sso_url, app_id, entity_id, acs_url, certificate, cert_expiry,
+  sso_url, entity_id, acs_url, certificate, cert_expiry,
   sign_auth, private_key_b64, client_cert_thumbprint, keep_existing_cert,
   jit_enabled, jit_mappings, keep_existing_signing_cert, sp_private_key_b64, existing_sso_status,
 }) => {
@@ -396,8 +388,8 @@ const saveSsoConfig = async ({
         entraTenantIdMasked: maskInput(String(entra_tenant_id || tenant_id)),
       });
       await upsertSamlConfig({
-        company_id, entity_id, sso_url, acs_url, certificate, cert_expiry, client_secret,
-        app_id, sign_auth, keep_existing_cert, keep_existing_signing_cert, sp_private_key_b64,
+        company_id, entity_id, sso_url, acs_url, certificate, cert_expiry,
+        sign_auth, keep_existing_cert, keep_existing_signing_cert, sp_private_key_b64,
       }, tx);
     }
     await replaceJitMappings(company_id, jit_enabled, jit_mappings, tx);
@@ -456,7 +448,6 @@ const sanitiseSamlRow = (samlRow, cid) => {
   const saml = samlRow.toJSON();
   saml.has_certificate = !!saml.certificate;
   saml.has_signing_certificate = !!saml.sp_private_key_enc;
-  delete saml.client_secret_enc;
   delete saml.certificate;
   delete saml.sp_private_key_enc;
   return saml;
