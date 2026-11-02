@@ -49,7 +49,7 @@ git diff --name-status master saml-test-popup-clean
 
 | Mac file | Where it goes in the VDI console |
 |---|---|
-| `mdna-console/rewrites.sso.template` | Hosting rewrite: `/auth/test-connection/saml/result` → `${SSO_SERVICE}` / `${REGION}` |
+| `vdi-reference/mdna-console/rewrites.sso.template` | Hosting rewrite: `/auth/test-connection/saml/result` → `${SSO_SERVICE}` / `${REGION}` |
 | `vdi-reference/mdna-console/src/hooks/useTestConnection.js` | `src/hooks/useTestConnection.js` — popup flow, `tc_saml_done` handshake, result call |
 | `vdi-reference/mdna-console/src/services/ssoApi.js` (`testSamlResultApi` export only) | add `testSamlResultApi` to `src/services/ssoApi.js`, after `testConnectionCallbackApi` |
 | `vdi-reference/mdna-console/src/views/auth-views/authentication/oidc-callback/index.js` | `src/views/auth-views/authentication/oidc-callback/index.js` — recognise `?saml_test=1` and signal done |
