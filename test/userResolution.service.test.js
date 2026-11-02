@@ -222,6 +222,40 @@ describe('userResolution.service', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  test('matches a role sent under the Entra SAML role URI', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'role', mapping_value: 'Zebra.Admin', role_id: 'role-admin', role_name: 'Admin', priority: 1 },
+    ]);
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    await resolveUser('company-1', {
+      emailaddress: 'saml-role@example.com',
+      objectidentifier: 'oid-saml-role',
+      'http://schemas.microsoft.com/ws/2008/06/identity/claims/role': 'Zebra.Admin',
+    }, 'saml');
+
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-admin'] }));
+  });
+
+  test('matches groups sent under the Entra SAML groups URI', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'group', mapping_value: 'group-1', role_id: 'role-manager', role_name: 'Manager', priority: 1 },
+    ]);
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockImplementation(async (u) => u);
+
+    await resolveUser('company-1', {
+      emailaddress: 'saml-group@example.com',
+      objectidentifier: 'oid-saml-group',
+      'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups': ['group-1', 'group-2'],
+    }, 'saml');
+
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-manager'] }));
+  });
+
   test('logs a warning (and does not match) when a custom claim name is absent from the token', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-1', jit_status: true });
     getJitMappings.mockResolvedValue([

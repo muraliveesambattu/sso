@@ -38,6 +38,10 @@ const toGroupArray = (value) => {
 const normEmail = (v) => (typeof v === "string" ? v.trim().toLowerCase() : v);
 const SAML_EMAIL_URI =
   "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress";
+const SAML_ROLE_URI =
+  "http://schemas.microsoft.com/ws/2008/06/identity/claims/role";
+const SAML_GROUPS_URI =
+  "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups";
 // Email exactly as the IdP sent it — lookup fallback for Firestore users
 // stored with mixed case.
 const rawEmail = (claims) =>
@@ -57,7 +61,7 @@ const extractIdentity = (claims, protocol) => {
         a["http://schemas.microsoft.com/identity/claims/objectidentifier"] ||
         null,
       displayName: a.name || a.displayname || a.givenname || null,
-      groups: toGroupArray(a.groups),
+      groups: toGroupArray(a.groups || a[SAML_GROUPS_URI]),
       department:
         a.department ||
         a["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department"] ||
@@ -67,7 +71,7 @@ const extractIdentity = (claims, protocol) => {
         a.jobTitle ||
         a["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle"] ||
         null,
-      appRoles: toGroupArray(a.role || a.roles),
+      appRoles: toGroupArray(a.role || a.roles || a[SAML_ROLE_URI]),
       raw: a,
     };
   }
