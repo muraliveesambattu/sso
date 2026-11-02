@@ -245,7 +245,7 @@ const testSamlDiscovery = async ({
       tenantIdMasked: maskInput(String(tenant_id)),
       status: res.status,
     });
-    return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
+    return { success: false, message: 'Tenant not found or unreachable' };
   }
   const tenantValidation = validateMetadataTenant(sso_url, res.body);
   if (tenantValidation) return tenantValidation;

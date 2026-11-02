@@ -378,7 +378,7 @@ describe('testConnection.service', () => {
 
       const result = await testConnection(samlPayload());
 
-      expect(result).toEqual({ success: false, message: 'SAML metadata unreachable (HTTP 500)' });
+      expect(result).toEqual({ success: false, message: 'Tenant not found or unreachable' });
     });
 
     test('fails when the metadata tenant differs from the SSO URL tenant', async () => {
