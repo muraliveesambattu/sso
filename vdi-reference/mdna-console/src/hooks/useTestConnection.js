@@ -553,10 +553,9 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
   /**
    * Wait for the SAML test login to finish.
    *
-   * Entra's login page sends Cross-Origin-Opener-Policy, so popup.closed
-   * reads true while the user is still signing in. Instead of watching the
-   * popup, ask the backend: it answers 202 (pending) until the ACS callback
-   * has run.
+   * The result is held by the backend, which answers 202 (pending) until the
+   * ACS callback has run. A closed popup only counts as cancelled while the
+   * backend is still pending.
    */
   const waitForSamlResult = ({
     popup,
@@ -634,6 +633,10 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
 
         requestInProgress = true;
 
+        // Read before asking: the backend stores the result before the
+        // popup closes itself, so closed + pending means the user closed it.
+        const popupWasClosed = popup.closed;
+
         try {
           const {
             ok,
@@ -643,6 +646,14 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
 
           // 401: this instance may not hold the session. Keep waiting.
           if (status === 202 || status === 401 || data?.pending) {
+            if (popupWasClosed && status !== 401) {
+              finish({
+                success: false,
+                message:
+                  'Test Connection was cancelled. Please try again.',
+              });
+            }
+
             return;
           }
 
