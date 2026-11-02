@@ -21,6 +21,11 @@ const ERROR_MESSAGES = {
   MISSING_SAML_RESPONSE:  'SAML response missing. Please try signing in again.',
   MISSING_RELAY_STATE:    'SAML session error. Please try signing in again.',
   SAML_LOGIN_FAILED:      'SAML login failed. Please try again.',
+  USER_NOT_PROVISIONED:   'Your account is not authorised for SSO access. Please contact your administrator.',
+  LOGIN_METHOD_NOT_ALLOWED: 'SSO login is not permitted for this account.',
+  NO_ROLE_ASSIGNED:       'No role is assigned to your account for this organisation. Please contact your administrator.',
+  USER_EXPIRED:           'Your account has expired. Please contact your administrator.',
+  MISSING_IDENTITY_CLAIMS: 'Required identity claims are missing. Please contact your administrator.',
 };
 
 function resolveErrorMessage(code, fallback) {
@@ -167,7 +172,9 @@ export default function OIDCCallback() {
       }
 
       if (error) {
-        setStatus({ type: 'error', message: resolveErrorMessage(error, 'Sign-in failed. Please try again.') });
+        const errorMessage = resolveErrorMessage(error, 'Sign-in failed. Please try again.');
+        setStatus({ type: 'error', message: errorMessage });
+        message.error(errorMessage);
         return;
       }
 
