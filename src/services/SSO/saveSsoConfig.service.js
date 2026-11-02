@@ -208,7 +208,7 @@ const saveSsoConfig = async (payload) => {
     client_id, auth_method, client_secret, redirect_uri,
     sso_url, entity_id, acs_url, certificate, certificate_password,
     sign_auth, keep_existing_cert,
-    jit_enabled, jit_mappings,
+    jit_enabled, jit_mappings, existing_sso_status,
   } = payload;
 
   validateRequiredFields(payload);
@@ -237,7 +237,7 @@ const saveSsoConfig = async (payload) => {
     sign_auth: sign_auth || false,
     private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
     keep_existing_cert: !!keep_existing_cert,
-    jit_enabled, jit_mappings: normalizedJitMappings,
+    jit_enabled, jit_mappings: normalizedJitMappings, existing_sso_status,
   };
 
   const savedCompanyId = await saveToPostgres(company_id, fields);

@@ -27,12 +27,9 @@ const handleSaveSsoConfig = async (req, res, next) => {
       certificate, certificate_password, jit_mappings,
       keep_existing_cert, sign_auth,
     } = req.body;
-
-    // The console has shipped both spellings of this flag: `jit_status` (main
-    // Save & Activate) and `jit_enabled` (the inline JIT-mappings save). Accept
-    // either so a payload from any console build persists the same way.
-    // `??` rather than `||` so an explicit `false` is honoured and not skipped.
-    const jit_enabled = req.body.jit_enabled ?? req.body.jit_status;
+    const rawStatus = req.body?.existing_sso_status;
+    const existing_sso_status = rawStatus ? rawStatus === 'active' : true;
+    const jit_enabled = req.body.jit_enabled ?? req.body.jit_status ?? false;
     const domains      = toDomainArray(req.body.domains);
     const tenant_id    = trimStr(req.body.tenant_id);
     const client_id    = trimStr(req.body.client_id);
@@ -41,6 +38,7 @@ const handleSaveSsoConfig = async (req, res, next) => {
     const entity_id    = trimStr(req.body.entity_id);   // SAML — SP entity / identifier
     const acs_url      = trimStr(req.body.acs_url);      // SAML — assertion consumer service URL
     const company_id   = trimStr(req.body.company_id);   // configuring admin's tenant id (sole owner key)
+    logger.info(`[POSTGRES] company_id handleSaveSsoConfig : ${company_id}`);
 
     // An Entra tenant may only be claimed by one organisation — reject if a
     // DIFFERENT org already registered it. The same org re-saving/editing its
@@ -69,7 +67,7 @@ const handleSaveSsoConfig = async (req, res, next) => {
       client_id, auth_method, client_secret, redirect_uri,
       sso_url, entity_id, acs_url, certificate, certificate_password,
       sign_auth, keep_existing_cert,
-      jit_enabled, jit_mappings,
+      jit_enabled, jit_mappings,existing_sso_status,rawStatus
     });
 
     // Audit log — who saved the config, from which IP

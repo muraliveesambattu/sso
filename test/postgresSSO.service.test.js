@@ -40,6 +40,7 @@ const loadPostgresService = () => {
   };
   const encrypt = jest.fn((value) => `enc:${value}`);
   const resolveSecret = jest.fn((value) => value ? `dec:${value}` : value);
+  const decrypt = jest.fn((value) => `dec:${value}`);
   const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
   jest.doMock('../src/config/logger', () => ({ logger }));
@@ -59,7 +60,7 @@ const loadPostgresService = () => {
     JitMapping,
     SsoUser,
   }));
-  jest.doMock('../src/utils/crypto.util', () => ({ encrypt, resolveSecret }));
+  jest.doMock('../src/utils/crypto.util', () => ({ encrypt, resolveSecret, decrypt }));
   jest.doMock('../src/config/db', () => queryDb);
   jest.doMock('sequelize', () => ({ Op: { in: Symbol('in') } }));
 
@@ -353,7 +354,7 @@ describe('postgresSSO.service', () => {
       company_id: 'new-company',
       entity_id: 'https://sp.example.com/metadata',
       acs_url: 'https://sp.example.com/callback',
-      certificate: 'cert-value',
+      certificate: 'enc:cert-value',
       // The admin's "sign AuthnRequest" choice is now persisted (was dropped).
       sign_authn_request: true,
     }), { transaction: mocks.transaction });
@@ -374,16 +375,18 @@ describe('postgresSSO.service', () => {
       toJSON: () => ({ company_id: 'company-1', client_secret_enc: 'enc-secret', private_key_enc: 'enc-key', client_id: 'client-1' }),
     });
     mocks.SamlConfiguration.findOne.mockResolvedValue({
-      toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert' }),
+      toJSON: () => ({ company_id: 'company-1', sp_private_key_enc: 'sp-key', certificate: 'cert', client_secret_enc: 'enc-saml' }),
     });
     mocks.JitMapping.findAll.mockResolvedValue([{ toJSON: () => ({ company_id: 'company-1', role_id: 'role-admin', role_name: 'Admin' }) }]);
     mocks.SsoDomain.findAll.mockResolvedValue([{ domain: 'example.com' }]);
 
     const details = await service.getSsoConfigDetails({ company_id: 'company-1' });
     expect(details.integration.domains).toEqual(['example.com']);
-    expect(details.oidc_config.client_secret_set).toBe(true);
+    expect(details.oidc_config.client_secret).toBe('dec:enc-secret');
     expect(details.oidc_config.client_secret_enc).toBeUndefined();
     expect(details.saml_config.sp_private_key_enc).toBeUndefined();
+    expect(details.saml_config.client_secret).toBeUndefined();
+    expect(details.saml_config.client_secret_enc).toBeUndefined();
     // role_name is stored on the mapping (no zdna_roles JOIN) so the console's
     // RMS-fed dropdown can pre-select the right option when a config is reopened.
     expect(details.jit_mappings[0]).toEqual(expect.objectContaining({ role_id: 'role-admin', role_name: 'Admin' }));
