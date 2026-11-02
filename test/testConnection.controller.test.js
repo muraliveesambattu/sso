@@ -180,10 +180,6 @@ describe('testConnection.controller', () => {
     const samlBody = {
       protocol: 'saml',
       sso_url: ` ${SSO_URL} `,
-      app_id: ' app-1 ',
-      client_secret: 'secret',
-      entity_id: 'https://sp.example.com/metadata',
-      acs_url: 'https://sp.example.com/callback',
       certificate: 'cert-b64',
       company_id: 'company-1',
       sign_authn_request: true,
@@ -198,10 +194,6 @@ describe('testConnection.controller', () => {
       expect(testConnection).toHaveBeenCalledWith(expect.objectContaining({
         protocol: 'saml',
         sso_url: SSO_URL,
-        app_id: 'app-1',
-        client_secret: 'secret',
-        entity_id: 'https://sp.example.com/metadata',
-        acs_url: 'https://sp.example.com/callback',
         certificate: 'cert-b64',
         company_id: 'company-1',
         sign_authn_request: true,

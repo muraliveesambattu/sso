@@ -88,8 +88,7 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 const OTHER_TENANT = '22222222-2222-2222-2222-222222222222';
 const APP = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const SSO_URL = `https://login.microsoftonline.com/${TENANT}/saml2`;
-const ENTITY = 'https://sp.example.com/metadata';
-const ACS = 'https://sp.example.com/callback';
+const APP_SSO_URL = `${SSO_URL}?appid=${APP}`;
 const RAW_CERT = 'MIIBCERTAAA';
 
 // Azure federation metadata carrying the tenant entityID and its signing certs.
@@ -102,32 +101,17 @@ const metadataXml = ({ tenant = TENANT, certs = [RAW_CERT] } = {}) =>
 const uploadedCert = (raw = RAW_CERT) =>
   Buffer.from(`-----BEGIN CERTIFICATE-----\n${raw}\n-----END CERTIFICATE-----`, 'utf8').toString('base64');
 
-const servicePrincipal = (overrides = {}) => ({
-  accountEnabled: true,
-  replyUrls: [ACS],
-  servicePrincipalNames: [ENTITY],
-  ...overrides,
-});
-
-// Routes the three outbound SAML calls: metadata, Graph token, Graph service principal.
+// Routes the one outbound SAML call: the federation metadata.
 const samlResponder = ({
   metadata = { statusCode: 200, body: metadataXml() },
-  token = { statusCode: 200, body: JSON.stringify({ access_token: 'graph-token' }) },
-  graph = { statusCode: 200, body: JSON.stringify({ value: [servicePrincipal()] }) },
 } = {}) => ({ url }) => {
   if (url.includes('federationmetadata')) return metadata;
-  if (url.includes('/oauth2/v2.0/token')) return token;
-  if (url.startsWith('https://graph.microsoft.com/')) return graph;
   throw new Error(`unexpected request ${url}`);
 };
 
 const samlPayload = (overrides = {}) => ({
   protocol: 'saml',
   sso_url: SSO_URL,
-  app_id: APP,
-  client_secret: 'graph-secret',
-  entity_id: ENTITY,
-  acs_url: ACS,
   certificate: uploadedCert(),
   ...overrides,
 });
@@ -367,14 +351,25 @@ describe('testConnection.service', () => {
       expect(httpSpy).not.toHaveBeenCalled();
     });
 
-    test('fetches metadata from the tenant federation URL with ?appid', async () => {
+    test('takes ?appid for the metadata URL from the SSO URL', async () => {
+      const urls = [];
+      mockRequest(https, (args) => { urls.push(args.url); return samlResponder()(args); });
+
+      await testConnection(samlPayload({ sso_url: APP_SSO_URL }));
+
+      expect(urls[0]).toBe(
+        `https://login.microsoftonline.com/${TENANT}/federationmetadata/2007-06/federationmetadata.xml?appid=${APP}`,
+      );
+    });
+
+    test('fetches the tenant metadata when the SSO URL has no appid', async () => {
       const urls = [];
       mockRequest(https, (args) => { urls.push(args.url); return samlResponder()(args); });
 
       await testConnection(samlPayload());
 
       expect(urls[0]).toBe(
-        `https://login.microsoftonline.com/${TENANT}/federationmetadata/2007-06/federationmetadata.xml?appid=${APP}`,
+        `https://login.microsoftonline.com/${TENANT}/federationmetadata/2007-06/federationmetadata.xml`,
       );
     });
 
@@ -408,7 +403,7 @@ describe('testConnection.service', () => {
     test('fails when the metadata carries no signing certificate', async () => {
       mockRequest(https, samlResponder({ metadata: { statusCode: 200, body: metadataXml({ certs: [] }) } }));
 
-      const result = await testConnection(samlPayload());
+      const result = await testConnection(samlPayload({ sso_url: APP_SSO_URL }));
 
       expect(result).toEqual({ success: false, message: 'Could not extract signing certificate from Azure metadata' });
     });
@@ -416,7 +411,7 @@ describe('testConnection.service', () => {
     test('fails when the uploaded certificate does not match the metadata', async () => {
       mockRequest(https, samlResponder());
 
-      const result = await testConnection(samlPayload({ certificate: uploadedCert('MIIBOTHER') }));
+      const result = await testConnection(samlPayload({ sso_url: APP_SSO_URL, certificate: uploadedCert('MIIBOTHER') }));
 
       expect(result).toEqual({ success: false, message: 'Certificate does not match Azure tenant signing certificate' });
     });
@@ -424,96 +419,25 @@ describe('testConnection.service', () => {
     test('matches the uploaded certificate against any of the metadata signing certs', async () => {
       mockRequest(https, samlResponder({ metadata: { statusCode: 200, body: metadataXml({ certs: ['MIIBFIRST', RAW_CERT] }) } }));
 
-      const result = await testConnection(samlPayload());
+      const result = await testConnection(samlPayload({ sso_url: APP_SSO_URL }));
 
       expect(result.success).toBe(true);
     });
 
-    test('reports a deactivated Entra application from the Graph token error', async () => {
-      mockRequest(https, samlResponder({
-        token: { statusCode: 401, body: JSON.stringify({ error: 'unauthorized_client', error_description: 'AADSTS7000112: Application is disabled.' }) },
-      }));
+    test('leaves the certificate to the popup when the SSO URL has no appid', async () => {
+      mockRequest(https, samlResponder({ metadata: { statusCode: 200, body: metadataXml({ certs: ['MIIBTENANTONLY'] }) } }));
 
       const result = await testConnection(samlPayload());
 
-      expect(result).toEqual({
-        success: false,
-        message: 'The Microsoft Entra application configured for SSO has been deactivated. Please review your SSO configuration.',
-      });
+      expect(result).toMatchObject({ success: true, message: 'Connection successful — SAML IdP metadata reachable' });
     });
 
-    test('reports a generic Entra app problem for other Graph token errors', async () => {
-      mockRequest(https, samlResponder({
-        token: { statusCode: 401, body: JSON.stringify({ error: 'invalid_client', error_description: 'AADSTS7000215: Invalid client secret' }) },
-      }));
+    test('reports a verified certificate when the SSO URL has an appid', async () => {
+      mockRequest(https, samlResponder());
 
-      const result = await testConnection(samlPayload());
+      const result = await testConnection(samlPayload({ sso_url: APP_SSO_URL }));
 
-      expect(result).toEqual({
-        success: false,
-        message: 'Unable to validate the configured Microsoft Entra application. Please review your Entra App configuration',
-      });
-    });
-
-    test('fails when Graph has no service principal for the app', async () => {
-      mockRequest(https, samlResponder({ graph: { statusCode: 200, body: JSON.stringify({ value: [] }) } }));
-
-      const result = await testConnection(samlPayload());
-
-      expect(result).toEqual({ success: false, message: 'Enterprise application validation failed.' });
-    });
-
-    test('fails when the enterprise application is disabled', async () => {
-      mockRequest(https, samlResponder({
-        graph: { statusCode: 200, body: JSON.stringify({ value: [servicePrincipal({ accountEnabled: false })] }) },
-      }));
-
-      const result = await testConnection(samlPayload());
-
-      expect(result).toEqual({ success: false, message: 'The Microsoft Entra application configured for SSO has been deactivated.' });
-    });
-
-    test('fails when the ACS URL is not a reply URL of the app', async () => {
-      mockRequest(https, samlResponder({
-        graph: { statusCode: 200, body: JSON.stringify({ value: [servicePrincipal({ replyUrls: ['https://other/acs'] })] }) },
-      }));
-
-      const result = await testConnection(samlPayload());
-
-      expect(result).toEqual({ success: false, message: 'Configured ACS URL does not match Microsoft Entra configuration.' });
-    });
-
-    test('accepts an ACS URL listed only in replyUrlsWithType', async () => {
-      mockRequest(https, samlResponder({
-        graph: { statusCode: 200, body: JSON.stringify({ value: [servicePrincipal({ replyUrls: [], replyUrlsWithType: [{ url: ACS }] })] }) },
-      }));
-
-      const result = await testConnection(samlPayload());
-
-      expect(result.success).toBe(true);
-    });
-
-    test('fails when the Entity ID is not an identifier of the app', async () => {
-      mockRequest(https, samlResponder({
-        graph: { statusCode: 200, body: JSON.stringify({ value: [servicePrincipal({ servicePrincipalNames: ['api://other'] })] }) },
-      }));
-
-      const result = await testConnection(samlPayload());
-
-      expect(result).toEqual({ success: false, message: 'Configured Entity ID does not match Microsoft Entra configuration.' });
-    });
-
-    test('sends the Graph token as a Bearer header and filters by appId', async () => {
-      let graphCall;
-      mockRequest(https, (args) => {
-        if (args.url.startsWith('https://graph.microsoft.com/')) graphCall = args;
-        return samlResponder()(args);
-      });
-
-      await testConnection(samlPayload());
-
-      expect(graphCall.options.headers.Authorization).toBe('Bearer graph-token');
-      expect(decodeURIComponent(graphCall.url)).toContain(`$filter=appId eq '${APP}'`);
+      expect(result).toMatchObject({ success: true, message: 'Connection successful — SAML IdP metadata reachable and certificate verified' });
     });
 
     describe('signing certificate', () => {
@@ -563,7 +487,7 @@ describe('testConnection.service', () => {
 
       expect(result).toEqual({
         success: true,
-        message: 'Connection successful. Microsoft Entra configuration validated.',
+        message: 'Connection successful — SAML IdP metadata reachable',
         data: {
           protocol: 'saml',
           sessionRef: 'saml-ref',
@@ -625,7 +549,7 @@ describe('testConnection.service', () => {
 
       expect(result).toEqual({
         success: true,
-        message: 'Connection successful. Microsoft Entra configuration validated.',
+        message: 'Connection successful — SAML IdP metadata reachable',
       });
       expect(logger.warn).toHaveBeenCalledWith('[SAML_TEST_SESSION_FAILED]', { error: 'deflate failed' });
     });
@@ -673,10 +597,6 @@ describe('testConnection.service', () => {
       SamlConfiguration.findOne.mockResolvedValue({
         sso_url: SSO_URL,
         certificate: 'stored-cert',
-        app_id: APP,
-        entity_id: ENTITY,
-        acs_url: ACS,
-        client_secret_enc: 'enc-secret',
       });
       const resolveSecret = require('../src/utils/crypto.util').resolveSecret;
       resolveSecret.mockImplementation((v) => (v === 'stored-cert' ? uploadedCert() : `plain:${v}`));
@@ -684,7 +604,7 @@ describe('testConnection.service', () => {
 
       const result = await validateSsoConfiguration('company-1');
 
-      expect(result).toEqual({ success: true, message: 'Connection successful. Microsoft Entra configuration validated.' });
+      expect(result).toEqual({ success: true, message: 'Connection successful — SAML IdP metadata reachable' });
       expect(buildSamlRedirectUrl).not.toHaveBeenCalled();
       resolveSecret.mockImplementation((value) => (value ? `plain:${value}` : value));
     });

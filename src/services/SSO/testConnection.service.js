@@ -122,7 +122,16 @@ const extractTenantFromSsoUrl = (url) => {
   return match ? match[1].toLowerCase() : null;
 };
 
-const buildSamlMetadataUrl = (sso_url, tenant_id, app_id) => {
+// Extracts the per-app id from an Azure SSO URL query string.
+// Azure sets ?appid={app-id} when the application has its own signing cert —
+// that cert only appears in the appid-scoped metadata, never the tenant default.
+const extractAppIdFromSsoUrl = (url) => {
+  if (typeof url !== 'string') return null;
+  const match = url.match(/[?&]appid=([0-9a-f-]{36})\b/i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+const buildSamlMetadataUrl = (sso_url, tenant_id) => {
   logger.debug('Building SAML metadata URL', {
     ssoUrlConfigured: !!sso_url,
     tenantIdMasked: maskInput(String(tenant_id)),
@@ -130,65 +139,9 @@ const buildSamlMetadataUrl = (sso_url, tenant_id, app_id) => {
   const tenant = sso_url ? extractTenantFromSsoUrl(sso_url) : tenant_id;
   const base = microsoft.samlMetadataUrl(tenant);
   const url = new URL(base);
-  if (app_id) url.searchParams.set('appid', app_id);
+  const appId = extractAppIdFromSsoUrl(sso_url);
+  if (appId) url.searchParams.set('appid', appId);
   return url.toString();
-};
-
-const getGraphAccessToken = async ({ tenant_id, app_id, client_secret }) => {
-  logger.debug('[SAML] Getting Graph access token', {
-    tenantIdMasked: maskInput(String(tenant_id)),
-  });
-  const tokenUrl = microsoft.tokenUrl(tenant_id);
-  const params = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: app_id,
-    client_secret,
-    scope: microsoft.graphScope,
-  });
-  const response = await fetchJson(tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-  if (response.status !== 200 || !response.body?.access_token) {
-    return {
-      success: false,
-      error: response.body?.error,
-      errorDescription: response.body?.error_description || '',
-    };
-  }
-  return { success: true, accessToken: response.body.access_token };
-};
-
-const validateEnterpriseApplication = async ({ accessToken, app_id, entity_id, acs_url }) => {
-  const graphUrl = `${microsoft.graphBase}/v1.0/servicePrincipals?$filter=appId eq '${app_id}'`;
-  const response = await fetchJson(graphUrl, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const servicePrincipal = response.body?.value?.[0];
-  logger.info('SAML Graph enterprise application validation', {
-    servicePrincipalExists: !!servicePrincipal,
-    accountEnabled: servicePrincipal?.accountEnabled,
-  });
-  if (!servicePrincipal) {
-    return { success: false, message: 'Enterprise application validation failed.' };
-  }
-  if (servicePrincipal.accountEnabled === false) {
-    return { success: false, message: 'The Microsoft Entra application configured for SSO has been deactivated.' };
-  }
-  const replyUrls = [
-    ...(servicePrincipal.replyUrls || []),
-    ...(servicePrincipal.replyUrlsWithType?.map(url => url.url) || []),
-  ];
-  if (acs_url && !replyUrls.includes(acs_url)) {
-    return { success: false, message: 'Configured ACS URL does not match Microsoft Entra configuration.' };
-  }
-  const servicePrincipalNames = servicePrincipal.servicePrincipalNames || [];
-  if (entity_id && !servicePrincipalNames.includes(entity_id)) {
-    return { success: false, message: 'Configured Entity ID does not match Microsoft Entra configuration.' };
-  }
-  return { success: true };
 };
 
 const validateSigningCertificate = async ({
@@ -216,24 +169,6 @@ const validateMetadataTenant = (sso_url, metadataXml) => {
     };
   }
   return null;
-};
-
-const validateGraphTokenResult = (graphTokenResult) => {
-  if (graphTokenResult.success) return null;
-  const errorDescription = graphTokenResult.errorDescription || '';
-  if (
-    errorDescription.includes('AADSTS7000112') ||
-    (errorDescription.toLowerCase().includes('application') && errorDescription.toLowerCase().includes('disabled'))
-  ) {
-    return {
-      success: false,
-      message: 'The Microsoft Entra application configured for SSO has been deactivated. Please review your SSO configuration.',
-    };
-  }
-  return {
-    success: false,
-    message: 'Unable to validate the configured Microsoft Entra application. Please review your Entra App configuration',
-  };
 };
 
 const validateAzureCertificate = (certificate, metadataXml) => {
@@ -271,7 +206,7 @@ const getExistingSamlSigningCertificate = async (company_id, signing_certificate
 };
 
 const testSamlDiscovery = async ({
-  tenant_id, sso_url, app_id, client_secret, entity_id, acs_url,
+  tenant_id, sso_url,
   certificate, sign_authn_request, signing_certificate,
   signing_certificate_password, use_existing_signing_cert,
 }) => {
@@ -296,7 +231,7 @@ const testSamlDiscovery = async ({
     sign_authn_request, use_existing_signing_cert, signing_certificate, signing_certificate_password,
   });
   if (signingValidation) return signingValidation;
-  const metadataUrl = buildSamlMetadataUrl(sso_url, tenant_id, app_id);
+  const metadataUrl = buildSamlMetadataUrl(sso_url, tenant_id);
   const res = await fetchJson(metadataUrl, { method: 'GET' });
   logger.debug('SAML metadata response received', {
     tenantIdMasked: maskInput(String(tenant_id)),
@@ -314,27 +249,15 @@ const testSamlDiscovery = async ({
   }
   const tenantValidation = validateMetadataTenant(sso_url, res.body);
   if (tenantValidation) return tenantValidation;
+  if (!certificate) return { success: false, message: 'Certificate not provided for validation.' };
+  // Tenant metadata doesn't list an app's own signing cert, so this match needs ?appid=.
+  // Without it, the popup verifies the real response signature against this certificate.
+  if (!extractAppIdFromSsoUrl(sso_url)) {
+    return { success: true, message: 'Connection successful — SAML IdP metadata reachable' };
+  }
   const certificateValidation = validateAzureCertificate(certificate, res.body);
   if (!certificateValidation.success) return certificateValidation;
-  const extractedTenant = extractTenantFromSsoUrl(sso_url);
-  const graphTokenResult = await getGraphAccessToken({
-    tenant_id: extractedTenant || tenant_id,
-    app_id,
-    client_secret,
-  });
-  const graphError = validateGraphTokenResult(graphTokenResult);
-  if (graphError) return graphError;
-  const graphToken = graphTokenResult.accessToken;
-  logger.info('SAML Graph validation completed', {
-    tenantIdMasked: maskInput(String(tenant_id)),
-    hasClientSecret: !!client_secret,
-    hasAccessToken: !!graphToken,
-  });
-  const graphValidation = await validateEnterpriseApplication({
-    accessToken: graphToken, app_id, entity_id, acs_url,
-  });
-  if (!graphValidation.success) return graphValidation;
-  return { success: true, message: 'Connection successful. Microsoft Entra configuration validated.' };
+  return { success: true, message: 'Connection successful — SAML IdP metadata reachable and certificate verified' };
 };
 
 /**
@@ -474,8 +397,8 @@ const validateTenantOwnership = async (tenant_id, company_id) => {
 
 const testConnection = async (payload) => {
   let {
-    protocol, auth_method, tenant_id, client_id, app_id, client_secret,
-    entity_id, acs_url, certificate, certificate_password, use_existing_cert,
+    protocol, auth_method, tenant_id, client_id, client_secret,
+    certificate, certificate_password, use_existing_cert,
     sso_url, redirect_uri, scope, company_id, sign_authn_request,
     signing_certificate, signing_certificate_password, use_existing_signing_cert,
   } = payload;
@@ -528,13 +451,12 @@ const testConnection = async (payload) => {
     logger.debug('SAML protocol flow initiated', {
       companyIdMasked: maskInput(String(company_id)),
       tenantIdMasked: maskInput(String(tenant_id)),
-      hasAppId: !!app_id,
     });
     if (use_existing_signing_cert) {
       signing_certificate = await getExistingSamlSigningCertificate(company_id, signing_certificate);
     }
     const check = await testSamlDiscovery({
-      tenant_id, sso_url, app_id, client_secret, entity_id, acs_url,
+      tenant_id, sso_url,
       certificate, sign_authn_request, signing_certificate,
       signing_certificate_password, use_existing_signing_cert,
     });
@@ -579,10 +501,6 @@ const getSsoConfigForActivation = async (company_id) => {
       tenant_id: integration.entra_tenant_id,
       sso_url: saml.sso_url,
       certificate: resolveSecret(saml.certificate),
-      app_id: saml.app_id,
-      entity_id: saml.entity_id,
-      acs_url: saml.acs_url,
-      client_secret: resolveSecret(saml.client_secret_enc),
     };
   }
   return null;
@@ -644,10 +562,6 @@ const validateSsoConfiguration = async (company_id) => {
     return testSamlDiscovery({
       tenant_id: config.tenant_id,
       sso_url: config.sso_url,
-      app_id: config.app_id,
-      client_secret: config.client_secret,
-      entity_id: config.entity_id,
-      acs_url: config.acs_url,
       certificate: config.certificate,
     });
   }

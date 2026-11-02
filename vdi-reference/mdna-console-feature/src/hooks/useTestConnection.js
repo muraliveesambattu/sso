@@ -1,8 +1,6 @@
 import { useState, useContext, useEffect, useRef } from 'react';
 import {
   AUTH_METHOD_MAP,
-  SAML_ACS_URL,
-  SAML_ENTITY_ID,
   REDIRECT_URI,
 } from '../constants/SsoConstants';
 import { testConnectionApi, testConnectionCallbackApi, testSamlResultApi } from '../services/ssoApi';
@@ -198,14 +196,10 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         protocol: 'saml',
         company_id: companyId,
         domains: parseDomains(values.entra_domain),
-        entity_id: SAML_ENTITY_ID,
-        acs_url: SAML_ACS_URL,
         sso_url: values.sso_url?.trim(),
         certificate: samlCertificate,
         use_existing_cert: fileValues.saml_cert === '__existing__',
         tenant_id: extractSamlTenantId(values.sso_url),
-        app_id: values.app_id?.trim(),
-        client_secret: values.client_secret?.trim(),
         sign_authn_request: !!values.sign_auth,
         signing_certificate: samlSigningCert,
         signing_certificate_password: values.saml_signing_cert_password || undefined,

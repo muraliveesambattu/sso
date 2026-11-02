@@ -59,7 +59,6 @@ const handleTestConnection = async (req, res, next) => {
     } = req.body;
     const tenant_id = trimStr(req.body.tenant_id);
     const client_id = trimStr(req.body.client_id);
-    const app_id = trimStr(req.body.app_id);
     const sso_url = trimStr(req.body.sso_url);
     const redirect_uri = trimStr(req.body.redirect_uri);
     const scope = trimStr(req.body.scope);
@@ -82,10 +81,10 @@ const handleTestConnection = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'sso_url (or tenant_id) is required' });
     }
 
-    logger.info('Test connection request', { action: 'test_connection', protocol, auth_method, ip: req.ip, app_id });
+    logger.info('Test connection request', { action: 'test_connection', protocol, auth_method, ip: req.ip });
 
-    const result = await testConnection({ protocol, auth_method, tenant_id, client_id, app_id, client_secret, entity_id: req.body.entity_id,
-      acs_url: req.body.acs_url, certificate, certificate_password, sso_url, redirect_uri, scope, domains, company_id, use_existing_cert,
+    const result = await testConnection({ protocol, auth_method, tenant_id, client_id, client_secret,
+      certificate, certificate_password, sso_url, redirect_uri, scope, domains, company_id, use_existing_cert,
       sign_authn_request, signing_certificate, signing_certificate_password, use_existing_signing_cert });
 
     // For OIDC — store internal config in tcStore keyed by sessionRef.
