@@ -1,8 +1,8 @@
 export const REDIRECT_URI   = process.env.REACT_APP_OIDC_REDIRECT_URI;
-export const SAML_ACS_URL    = process.env.REACT_APP_SAML_ACS_URL;
+export const SAML_ACS_URL   = process.env.REACT_APP_SAML_ACS_URL;
 export const SAML_ENTITY_ID = process.env.REACT_APP_SAML_ENTITY_ID;
 
-export const API_BASE       = '';
+export const API_BASE      = '';
 export const API_BASE_GATEWAY = process.env.REACT_APP_SSO_API_BASE_GATEWAY ?? '';
 
 export const AUTH_METHOD_MAP = {
@@ -31,3 +31,17 @@ export const FQDN =
 export const HTTPS =  /^https:\/\/.+/;
 export const PEM_BODY =
   /^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----$/;
+
+export const SAML_SSO_URL_PATTERN =
+  /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/saml2$/i;
+
+export const OIDC_SSO_URL_PATTERN =
+  /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/oauth2\/v2\.0\/authorize$/i;
+
+export const SAML_SSO_URL_EXAMPLE =
+  'https://login.microsoftonline.com/{uuid}/saml2';
+
+export const OIDC_SSO_URL_EXAMPLE =
+  'https://login.microsoftonline.com/{uuid}/oauth2/v2.0/authorize';
+
+export const CLIENT_SECRET_RE = /^[\x21-\x7E]+$/;

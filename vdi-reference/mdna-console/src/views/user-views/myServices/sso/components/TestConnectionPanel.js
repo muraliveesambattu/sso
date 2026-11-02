@@ -8,7 +8,7 @@ const TestConnectionPanel = ({ isTestReady, testLoading, testResult, onTest }) =
       <Button
         loading={testLoading}
         disabled={!isTestReady || testLoading}
-        onClick={onTest}
+        onClick={data=>onTest(false)}
         style={{
           borderColor: isTestReady ? '#0073E6' : '#d9d9d9',
           color: isTestReady ? '#0073E6' : '#bfbfbf',

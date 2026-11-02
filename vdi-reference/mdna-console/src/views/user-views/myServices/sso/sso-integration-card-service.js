@@ -4,7 +4,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { useSsoForm } from '../../../../hooks/useSsoForm';
 import { readFileAsBase64, useTestConnection } from '../../../../hooks/useTestConnection';
 import { useJitMappings } from '../../../../hooks/useJitMappings';
-import { activateSso, deactivateSso, deleteSsoConfig, getSsoConfig, saveConfigApi, saveSsoConfig } from '../../../../services/ssoApi';
+import { activateSso, deleteSsoConfig, getSsoConfig, saveConfigApi, saveSsoConfig, activateDeactivateSSO } from '../../../../services/ssoApi';
 import { AUTH_METHOD_MAP } from '../../../../constants/SsoConstants';
 import IdpProtocolSelector from './components/IdpProtocolSelector';
 import OidcConfigForm from './components/OidcConfigForm';
@@ -15,7 +15,7 @@ import { getTenantId } from 'auth/FirebaseAuth';
 import PermissionRestricted from 'views/app-views/utils/permission-restricted';
 import { GetPermissionForPage } from 'views/app-views/utils/pagePermission';
 import { AuthContext, useAuthContext } from 'auth/AuthProvider';
-import PropTypes from 'prop-types'
+import PropTypes from 'prop-types';
 
 const sectionLabel = { fontSize: 15, fontWeight: 600, color: '#1a1a2e' };
 
@@ -38,7 +38,7 @@ const SectionTitle = ({ text, tooltip }) => (
 SectionTitle.propTypes = {
   text: PropTypes.string.isRequired,
   tooltip: PropTypes.string,
-}
+};
 
 const REVERSE_AUTH_METHOD = Object.fromEntries(
   Object.entries(AUTH_METHOD_MAP).map(([formVal, apiVal]) => [apiVal, formVal])
@@ -56,15 +56,21 @@ const mapApiToSavedConfig = (d) => ({
   client_id: d.oidc_config?.client_id,
   auth_method: d.oidc_config?.client_auth_method,
   idp: d.integration.idp,
+  sso_url: d.saml_config?.sso_url,
   sso_status: d.integration.sso_status,
   jitEnabled: d.integration.jit_status,
   jitMappings: (d.jit_mappings || []).map(m => ({
     zdna_role: m.role_name || m.role_id, mapping_source: m.mapping_source, mapping_value: m.mapping_value,
   })),
   savedAt: new Date(),
-  hasCert: !!d.oidc_config?.client_cert_thumbprint,
+  sign_authn_request: d.saml_config?.sign_authn_request,
+  hasCert:
+    d.integration?.protocol === 'saml'
+      ? !!d.saml_config?.has_certificate
+      : !!d.oidc_config?.client_cert_thumbprint,
+  hasSigningCert: !!d.saml_config?.has_signing_certificate,
   certNames: {},
-  client_secret: d.oidc_config?.client_secret_enc
+  client_secret: d.integration.protocol === 'oidc' ? d.oidc_config?.client_secret : undefined,
 });
 
 const parseDomains = (entra_domain) => {
@@ -73,17 +79,64 @@ const parseDomains = (entra_domain) => {
   return Array.isArray(entra_domain) ? entra_domain : [];
 };
 
-// Centred spinner used while the saved config is being fetched on first paint.
-// Note: antd v5 only honours <Spin tip> in nest/fullscreen mode — a standalone
-// `tip` prop logs a console warning — hence the separate caption node.
+const validateJitMappings = (jitEnabled, jitMappings) => {
+  if (!jitEnabled) return true;
+  return !jitMappings.some(m =>
+    !m.zdna_role || !m.mapping_source ||
+    (m.mapping_source !== 'default' && !m.mapping_value)
+  );
+};
+
+const buildSavePayload = ({
+  ownerTenantId, protocol, idp, values, fileValues,
+  jitEnabled, jitMappings, oidcCertB64, samlCertB64, samlSigningCertB64,
+}) => ({
+  company_id: ownerTenantId,
+  protocol,
+  idp,
+  domains: parseDomains(values.entra_domain),
+  tenant_id: values.tenant_id,
+  client_id: values.client_id,
+  auth_method: AUTH_METHOD_MAP[values.auth_method],
+  client_secret: values.client_secret || undefined,
+  use_existing_cert: protocol === 'saml'
+    ? fileValues.saml_cert === '__existing__'
+    : fileValues.certificate === '__existing__',
+  use_existing_signing_cert: !!values.sign_auth && fileValues.saml_signing_cert === '__existing__',
+  sign_auth: values.sign_auth,
+  signing_certificate: samlSigningCertB64,
+  signing_certificate_password: values.saml_signing_cert_password,
+  certificate: protocol === 'saml' ? samlCertB64 : oidcCertB64,
+  certificate_password: values.certificate_password || undefined,
+  redirect_uri: values.redirect_uri,
+  sso_url: values.sso_url,
+  jit_status: jitEnabled,
+  jit_mappings: jitEnabled ? jitMappings.map((row, index) => ({ ...row, order: index + 1 })) : [],
+});
+
 const LoadingCard = ({ text }) => (
-  <Card style={{ borderRadius: 10, marginTop: 16 }} bodyStyle={{ padding: '24px' }}>
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', minHeight: 240, gap: 12,
-    }}>
-      <Spin size="large" />
-      <span style={{ fontSize: 14, fontWeight: 400, color: '#595959' }}>{text}</span>
+  <Card
+    style={{ borderRadius: 10, marginTop: 16, width: '100%' }}
+    bodyStyle={{ padding: '24px', width: '100%', boxSizing: 'border-box' }}
+  >
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: 240,
+        width: '100%',
+        gap: 12,
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
+        <Spin size="large" />
+      </div>
+      <span style={{ fontSize: 14, fontWeight: 400, color: '#595959', display: 'block', width: '100%' }}>
+        {text}
+      </span>
     </div>
   </Card>
 );
@@ -98,9 +151,6 @@ const SsoIntegrationPage = () => {
   const [originalConfig, setOriginalConfig] = useState(null);
   const [jitEnabled, setJitEnabled] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
-  // Covers the first-paint fetch only. Without it the empty form renders and
-  // then snaps to ActiveConfigView when the request lands, which reads as the
-  // page being slow to "display" the saved config.
   const [initialLoading, setInitialLoading] = useState(true);
   const context = useContext(AuthContext);
   const tenantId = getTenantId(context?.currentUser);
@@ -129,12 +179,17 @@ const SsoIntegrationPage = () => {
     handleTestConnection,
   } = useTestConnection(form, protocol, fileValues, setIsTestReady);
 
+  const isReplacingOidcCert =
+    fileValues.certificate &&
+    fileValues.certificate !== '__existing__';
+
+  const isReplacingSigningCert =
+    fileValues.saml_signing_cert &&
+    fileValues.saml_signing_cert !== '__existing__';
+
   const { currentUser } = useAuthContext();
   const claims = currentUser?.claims;
-  const isSSOUser = claims?.loginType === "entra";
-  // Kept as a primitive so the fetch effect below depends on the id, not on the
-  // currentUser object identity. Optional chaining because savedConfig is null
-  // on first render — reading .ownerTenantId before auth resolved it threw.
+  const isSSOUser = claims?.loginType === 'entra';
   const ownerTenantIdFromUser = getTenantId(currentUser);
   const ownerTenantId = ownerTenantIdFromUser || savedConfig?.ownerTenantId;
 
@@ -145,23 +200,23 @@ const SsoIntegrationPage = () => {
   } = useJitMappings();
 
   const handleCancel = () => {
-    const currentIdp = form.getFieldValue('idp');
-    const currentProtocol = form.getFieldValue('protocol');
     form.resetFields();
-    if (originalConfig) {
-      form.setFieldsValue({ idp: currentIdp, protocol: currentProtocol });
-    } else {
-      setIdp(undefined);
-      setProtocol(undefined);
-    }
+    setIdp(undefined);
+    setProtocol(undefined);
+    setAuthMethod(undefined);
+    setSignAuthn(false);
     setFileValues({});
     setJitEnabled(false);
     resetMappings();
     setIsTestReady(false);
     setTestResult(null);
     setTestPassed(false);
-    setSavedConfig(originalConfig);
     setIsEditMode(false);
+    if (originalConfig) {
+      setSavedConfig(originalConfig);
+    } else {
+      setSavedConfig(null);
+    }
   };
 
   useEffect(() => {
@@ -180,6 +235,7 @@ const SsoIntegrationPage = () => {
         };
         setSavedConfig(config);
         setOriginalConfig(config);
+        setProtocol(data?.integration?.protocol);
       } catch (e) {
         if (!cancelled) console.error('Failed to load SSO config for current user', e);
       }
@@ -188,8 +244,6 @@ const SsoIntegrationPage = () => {
   }, [isSSOUser, claims?.companyId]);
 
   useEffect(() => {
-    // Nothing to fetch — clear the spinner so the empty form can render,
-    // otherwise the page would spin forever for a user with no tenant.
     if (!ownerTenantIdFromUser) {
       setInitialLoading(false);
       return;
@@ -208,6 +262,7 @@ const SsoIntegrationPage = () => {
           }
           setSavedConfig(config);
           setOriginalConfig(config);
+          setProtocol(cfg?.integration?.protocol);
         }
       } catch (err) {
         const msg = err?.message || '';
@@ -222,39 +277,28 @@ const SsoIntegrationPage = () => {
   }, [ownerTenantIdFromUser]);
 
   const handleSaveActivate = async () => {
-    if (jitEnabled) {
-      const invalid = jitMappings.some(m =>
-        !m.zdna_role || !m.mapping_source ||
-        (m.mapping_source !== 'default' && !m.mapping_value));
-      if (invalid) {
-        message.error('Please complete all JIT role mapping rows before saving.');
-        return;
-      }
+    if (!validateJitMappings(jitEnabled, jitMappings)) {
+      message.error('Please complete all JIT role mapping rows before saving.');
+      return;
     }
+
     const values = form.getFieldsValue();
     const [oidcCertB64, samlCertB64] = await Promise.all([
-      fileValues.certificate ? readFileAsBase64(fileValues.certificate) : Promise.resolve(undefined),
-      fileValues.saml_cert ? readFileAsBase64(fileValues.saml_cert) : Promise.resolve(undefined),
+      fileValues.certificate && fileValues.certificate !== '__existing__'
+        ? readFileAsBase64(fileValues.certificate)
+        : Promise.resolve(undefined),
+      fileValues.saml_cert && fileValues.saml_cert !== '__existing__'
+        ? readFileAsBase64(fileValues.saml_cert)
+        : Promise.resolve(undefined),
     ]);
+    const samlSigningCertB64 = fileValues.saml_signing_cert && fileValues.saml_signing_cert !== '__existing__'
+      ? await readFileAsBase64(fileValues.saml_signing_cert)
+      : undefined;
 
-    const domains = parseDomains(values.entra_domain);
-
-    const payload = {
-      company_id: ownerTenantId,
-      protocol,
-      idp,
-      domains,
-      tenant_id: values.tenant_id,
-      client_id: values.client_id,
-      auth_method: AUTH_METHOD_MAP[values.auth_method],
-      client_secret: values.client_secret || undefined,
-      certificate: protocol === 'saml' ? samlCertB64 : oidcCertB64,
-      certificate_password: values.certificate_password || undefined,
-      redirect_uri: values.redirect_uri,
-      sso_url: values.sso_url,
-      jit_status: jitEnabled,
-      jit_mappings: jitEnabled ? jitMappings.map((row, index) => ({ ...row, order: index + 1 })) : [],
-    };
+    const payload = buildSavePayload({
+      ownerTenantId, protocol, idp, values, fileValues,
+      jitEnabled, jitMappings, oidcCertB64, samlCertB64, samlSigningCertB64,
+    });
 
     setSaveLoading(true);
     try {
@@ -264,24 +308,13 @@ const SsoIntegrationPage = () => {
         return;
       }
       message.success(data.message || 'SSO configuration saved and activated!');
-      const config = {
-        ...values,
-        idp,
-        protocol,
-        company_id: tenantId,
-        jitEnabled,
-        jitMappings: jitMappings.map((row, index) => ({ ...row, order: index + 1 })),
-        savedAt: new Date(),
-        hasCert: !!fileValues.saml_cert || !!fileValues.certificate,
-        certNames: {
-          saml_cert: fileValues.saml_cert?.name || null,
-          certificate: fileValues.certificate?.name || null,
-          saml_signing_cert: fileValues.saml_signing_cert?.name || null,
-        },
-        sso_status: 'active',
-      };
-      setSavedConfig(config);
-      setOriginalConfig(config);
+      const body = await getSsoConfig({ companyId: ownerTenantId });
+      const cfg = body?.data || body;
+      if (cfg?.integration) {
+        const config = mapApiToSavedConfig(cfg);
+        setSavedConfig(config);
+        setOriginalConfig(config);
+      }
       setIsEditMode(false);
     } catch (err) {
       message.error(err.message || 'Network error — is the backend running?');
@@ -294,12 +327,12 @@ const SsoIntegrationPage = () => {
     handleAuthMethodChange(val, () => { setTestPassed(false); setTestResult(null); });
 
   const mappingErrors = jitEnabled ? allMappingErrors : {};
-  const isSaveEnabled = testPassed && isJitValid(jitEnabled);
+  const isSaveEnabled = testPassed && testResult != null && isJitValid(jitEnabled);
 
   const handleEdit = () => {
     const cfg = savedConfig;
     const formAuthMethod = REVERSE_AUTH_METHOD[cfg.auth_method] || cfg.auth_method;
-    const formSignAuth = cfg.sign_auth || false;
+    const formSignAuth = cfg.sign_authn_request || false;
     resetMappings(cfg.jitMappings || []);
     setJitEnabled(cfg.jitEnabled || false);
     setIdp(cfg.idp);
@@ -317,13 +350,18 @@ const SsoIntegrationPage = () => {
       sign_auth: formSignAuth,
       client_secret: cfg.client_secret || undefined,
     };
-    setFileValues({});
-    setIsTestReady(false);
+    setFileValues({
+      ...(cfg.hasCert && cfg.protocol === 'saml' ? { saml_cert: '__existing__' } : {}),
+      ...(cfg.hasSigningCert && cfg.protocol === 'saml' ? { saml_signing_cert: '__existing__' } : {}),
+      ...(cfg.hasCert && cfg.protocol === 'oidc' && formAuthMethod === 'certificate'
+        ? { certificate: '__existing__' }
+        : {}),
+    });
+    setIsTestReady(true);
     setTestPassed(false);
     setTestResult(null);
     form.resetFields();
     form.setFieldsValue(restoredValues);
-    setIsTestReady(checkTestReady(restoredValues,{}));
     setSavedConfig(null);
     setIsEditMode(true);
   };
@@ -339,21 +377,44 @@ const SsoIntegrationPage = () => {
     }
   };
 
-  const handleDeactivate = () => {
+  const handleDeactivate = async () => {
+    const status = savedConfig.sso_status === 'active' ? 'inactive' : 'active';
     Modal.confirm({
-      title: 'Deactivate SSO?',
-      content: 'Users will no longer be able to log in using SSO. Do you want to continue?',
-      okText: 'Deactivate',
-      okType: 'danger',
+      title: `${status === 'active' ? 'Activate' : 'Deactivate'} SSO?`,
+      content:
+        status === 'inactive'
+          ? 'Users will no longer be able to log in using SSO. Do you want to continue?'
+          : 'Users will be able to log in using SSO. Do you want to continue?',
+      okText: status === 'active' ? 'Activate' : 'Deactivate',
+      okType: status === 'inactive' ? 'danger' : 'primary',
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          await deactivateSso(savedConfig.company_id);
-          setSavedConfig(prev => ({ ...prev, sso_status: 'inactive' }));
-          setOriginalConfig(prev => ({ ...prev, sso_status: 'inactive' }));
-          message.success('SSO deactivated');
+          const updatedConfig = { ...savedConfig, sso_status: status };
+          if (status === 'inactive') {
+            await activateDeactivateSSO(updatedConfig);
+            setSavedConfig(updatedConfig);
+            setOriginalConfig(updatedConfig);
+            message.success(`SSO ${status === 'active' ? 'Activated' : 'Deactivated'}`);
+            return;
+          }
+          handleTestConnection(true)
+            .then((data) => {
+              if (data?.success) return activateDeactivateSSO(updatedConfig);
+              message.error(data?.message);
+            })
+            .then((data) => {
+              if (data?.success) {
+                setSavedConfig(updatedConfig);
+                setOriginalConfig(updatedConfig);
+                message.success(`SSO ${status === 'active' ? 'Activated' : 'Deactivated'}`);
+                return
+              }
+              data?.message && message.error(data.message);
+            })
+            .catch((err) => message.error(err.message));
         } catch (err) {
-          message.error(err.message || 'Failed to deactivate SSO');
+          message.error(err.message || `Failed to ${status === 'active' ? 'Activate' : 'Deactivate'} SSO`);
         }
       },
     });
@@ -362,6 +423,7 @@ const SsoIntegrationPage = () => {
   const handleRemove = async (companyId) => {
     try {
       await deleteSsoConfig(companyId);
+      setOriginalConfig(null);
       handleCancel();
       message.success('SSO configuration removed');
       setSavedConfig(null);
@@ -388,13 +450,15 @@ const SsoIntegrationPage = () => {
   };
 
   const handleProtocolChangeWithReset = (value) => {
-    resetMappings();
-    setJitEnabled(false);
-    handleProtocolChange(value);
+    handleProtocolChange(value, () => {
+      resetMappings();
+      setJitEnabled(false);
+      setTestPassed(false);
+      setTestResult(null);
+      setIsTestReady(false);
+    });
   };
 
-  // Held before the savedConfig branch so the user never sees the empty form
-  // flash while the saved config is still in flight.
   if (initialLoading) {
     return <LoadingCard text="Loading SSO configuration…" />;
   }
@@ -415,11 +479,16 @@ const SsoIntegrationPage = () => {
             idp: savedConfig.idp,
             domains: savedDomains,
             tenant_id: savedConfig.tenant_id,
+            client_secret: savedConfig.client_secret,
+            sso_url: savedConfig.sso_url,
+            use_existing_cert: savedConfig.hasCert,
+            use_existing_signing_cert: savedConfig.hasSigningCert,
             client_id: savedConfig.client_id,
             auth_method: AUTH_METHOD_MAP[REVERSE_AUTH_METHOD[savedConfig.auth_method]] || savedConfig.auth_method,
             company_id: savedConfig.company_id,
             jit_enabled: true,
             jit_mappings: mappings.map((row, index) => ({ ...row, order: index + 1 })),
+            existing_sso_status: savedConfig.sso_status,
           });
         }}
       />
@@ -448,12 +517,14 @@ const SsoIntegrationPage = () => {
             <SectionTitle text="Enter your Entra credentials to configure the OIDC connection" />
             <OidcConfigForm
               authMethod={authMethod}
+              hasExistingCert={fileValues.certificate === '__existing__'}
+              isReplacingCert={isReplacingOidcCert}
               onAuthMethodChange={handleAuthMethodChangeWithReset}
               onFileChange={handleFileChange}
               isTestReady={isTestReady}
               testLoading={testLoading}
               testResult={testResult}
-              onTest={handleTestConnection}
+              onTest={data => handleTestConnection(data)}
             />
           </>
         )}
@@ -462,12 +533,15 @@ const SsoIntegrationPage = () => {
             <SectionTitle text="Enter your Entra credentials to configure the SAML connection" />
             <SamlConfigForm
               signAuthn={signAuthn}
+              hasExistingSigningCert={fileValues.saml_signing_cert === '__existing__'}
+              hasExistingCert={fileValues.saml_cert === '__existing__'}
+              isReplacingSigningCert={isReplacingSigningCert}
               onSignAuthnChange={setSignAuthn}
               onFileChange={handleFileChange}
               isTestReady={isTestReady}
               testLoading={testLoading}
               testResult={testResult}
-              onTest={handleTestConnection}
+              onTest={data => handleTestConnection(data)}
             />
           </>
         )}
@@ -482,13 +556,13 @@ const SsoIntegrationPage = () => {
           disabled={!testPassed}
         />
         <Divider style={{ margin: '20px 0 16px' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' ,flexWrap:'wrap'}}>
-          <span style={{ fontSize: 12, fontWeight: 400, color: '#bfbfbf' ,flex:1 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#bfbfbf', flex: 1 }}>
             {testPassed
               ? 'Mandatory Steps must be completed before activation*'
               : 'Test Connection must pass before activation*'}
           </span>
-          <div style={{ display: 'flex', gap: 8 ,flexWrap:'wrap'}}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button onClick={handleCancel} style={{ borderRadius: 6 }}>
               Cancel
             </Button>

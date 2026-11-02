@@ -150,6 +150,20 @@ export const testSamlResultApi = (payload) =>
     REQUEST_TIMEOUT_MS
   );
 
+
+export const activateDeactivateSSO = async ({company_id,sso_status}) => {
+  const res = await fetchWithRetry(
+    `${API_BASE_GATEWAY}/auth/sso/config/${encodeURIComponent(company_id)}/status`,
+    {
+      method: 'PATCH',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify({ status: sso_status }),
+    },
+    CRUD_TIMEOUT_MS
+  );
+  return handleResponse(res);
+};
+
 // ── Save & activate SSO configuration with optional JIT mappings ──────────────
 export const saveConfigApi = async (payload) =>
   fetchWithRetry(
@@ -166,7 +180,7 @@ export const saveConfigApi = async (payload) =>
 export const getSsoConfig = async ({ domain, companyId }) => {
   const param = companyId
     ? `company_id=${encodeURIComponent(companyId)}`
-    : `domain=${encodeURIComponent(domain)}`;
+      : `domain=${encodeURIComponent(domain)}`;
   const res = await fetchWithRetry(
     `${API_BASE_GATEWAY}/auth/sso/config?${param}`,
     { method: 'GET', headers: await getAuthHeaders() },

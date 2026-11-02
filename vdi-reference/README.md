@@ -10,6 +10,23 @@ VDI (2026-10-13), because the VDI files cannot be copied to this machine.
 - They are reference only: nothing here is imported or run, and `package.json`'s jest
   config ignores `vdi-reference/`.
 
+## Feature-branch files (safe to port)
+
+These 7 files in `mdna-console/src/` come from `master_zdna_edcl_700_feature1`, with the
+SAML popup, Roles and no App ID or Client Secret on the SAML form. Only these are ready to
+copy to the VDI. Every other file here is an older copy, and the notes below don't apply
+to these 7.
+
+- `constants/SsoConstants.js`
+- `hooks/useSsoForm.js`
+- `hooks/useTestConnection.js`
+- `services/ssoApi.js`
+- `views/user-views/myServices/sso/components/SamlConfigForm.js`
+- `views/user-views/myServices/sso/components/TestConnectionPanel.js`
+- `views/user-views/myServices/sso/sso-integration-card-service.js`
+
+## Older copies
+
 | File | Lines on VDI | Coverage |
 |---|---|---|
 | `mdna-console/src/hooks/useTestConnection.js` | 232 | complete |

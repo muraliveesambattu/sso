@@ -6,7 +6,7 @@ import { validateDomains, validateSsoUrl, validatePemOrDerCertFile, validatePkcs
 import { SAML_ACS_URL, SAML_ENTITY_ID } from '../../../../../constants/SsoConstants';
 import TestConnectionPanel from './TestConnectionPanel';
 
-const fieldLabel    = { fontSize: 13, fontWeight: 400, color: '#595959' };
+const fieldLabel = { fontSize: 13, fontWeight: 400, color: '#595959' };
 const readOnlyStyle = { background: '#f5f5f5', borderColor: '#d9d9d9', color: '#1a1a2e', borderRadius: 6 };
 
 const sectionHeaderStyle = {
@@ -32,13 +32,16 @@ const RequiredMark = () => <span style={{ color: '#ff4d4f' }}>{' *'}</span>;  //
 const SamlConfigForm = ({
   signAuthn,
   onSignAuthnChange,
+  hasExistingCert,
+  isReplacingSigningCert,
+  hasExistingSigningCert,
   onFileChange,
   isTestReady,
   testLoading,
   testResult,
   onTest,
 }) => {
-  const [copiedAcs, setCopiedAcs]       = useState(false);
+  const [copiedAcs, setCopiedAcs] = useState(false);
   const [copiedEntity, setCopiedEntity] = useState(false);
 
   return (
@@ -133,24 +136,8 @@ const SamlConfigForm = ({
       <Form.Item
         label={
           <span style={fieldLabel}>
-            Application (Client) ID<RequiredMark />
-            <Tooltip title="Found in Entra Enterprise Application → Overview. Copy the 'Application (client) ID' value.">
-              <InfoCircleOutlined style={{ color: '#0073E6', fontSize: 13, marginLeft: 6, cursor: 'pointer' }} />
-            </Tooltip>
-          </span>
-        }
-        name="app_id"
-        rules={[{ required: true, message: 'Application ID is required' }]}
-        style={{ marginBottom: 16 }}
-      >
-        <Input placeholder="00000000-0000-0000-0000-000000000000" />
-      </Form.Item>
-
-      <Form.Item
-        label={
-          <span style={fieldLabel}>
             Microsoft Entra Tenant Domain<RequiredMark />
-            <Tooltip title="Enter the verified domain(s) registered in your Microsoft Entra tenant (e.g. contoso.com). Users signing in with these domains will be routed to your Entra SSO login. Separate multiple domains with a comma.">
+            <Tooltip title="Enter the verified domain(s) registered in your Microsoft Entra tenant (e.g. contoso.com). Users signing in with these domains will be routed to your Entra SSO login. Separate multiple domains with a comma">
               <InfoCircleOutlined style={{ color: '#0073E6', fontSize: 13, marginLeft: 6, cursor: 'pointer' }} />
             </Tooltip>
           </span>
@@ -176,8 +163,8 @@ const SamlConfigForm = ({
         getValueFromEvent={(e) => e?.target?.files?.[0]}
         rules={[{
           validator: async (_, file) => {
-            if (!file) throw new Error('Certificate is required');
-            await validatePemOrDerCertFile(file);
+            if (!file && !hasExistingCert) throw new Error('Certificate is required');
+            if (file) await validatePemOrDerCertFile(file);
           }
         }]}
         style={{ marginBottom: 16 }}
@@ -189,6 +176,19 @@ const SamlConfigForm = ({
           style={{ width: '100%', padding: '4px 0' }}
           onChange={(e) => onFileChange('saml_cert', e)}
         />
+        {hasExistingCert && (
+          <span
+            style={{
+              fontSize: 12,
+              color: '#ff4d4f',
+              display: 'block',
+              marginTop: 4,
+            }}
+          >
+            Certificate already configured. Upload a new certificate only if replacement is required.
+          </span>
+        )}
+
       </Form.Item>
 
       <Form.Item
@@ -223,8 +223,10 @@ const SamlConfigForm = ({
               getValueFromEvent={(e) => e?.target?.files?.[0]}
               rules={[{
                 validator: async (_, file) => {
-                  if (!file) throw new Error('Signing certificate is required');
-                  await validatePkcs12File(file);
+                  if (!file && !hasExistingSigningCert) throw new Error('Signing certificate is required');
+                  if (file) {
+                    await validatePkcs12File(file);
+                  }
                 }
               }]}
               style={{ marginBottom: 16 }}
@@ -236,6 +238,18 @@ const SamlConfigForm = ({
                 style={{ width: '100%', padding: '4px 0' }}
                 onChange={(e) => onFileChange('saml_signing_cert', e)}
               />
+              {hasExistingSigningCert && (
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: '#ff4d4f',
+                    display: 'block',
+                    marginTop: 4,
+                  }}
+                >
+                  Signing certificate already configured. Upload a new certificate only if replacement is required.
+                </span>
+              )}
             </Form.Item>
           </Col>
           <Col span={12}>
@@ -249,10 +263,37 @@ const SamlConfigForm = ({
                 </span>
               }
               name="saml_signing_cert_password"
-              rules={[{ required: true, message: 'Password required' }]}
+              rules={[
+                {
+                  validator: async (_, value) => {
+                    if (
+                      (!hasExistingSigningCert ||
+                        isReplacingSigningCert) &&
+                      !value
+                    ) {
+                      throw new Error('Password required');
+                    }
+                  }
+                }
+              ]}
               style={{ marginBottom: 16 }}
             >
-              <Input.Password />
+              <Input.Password
+                placeholder={
+                  hasExistingSigningCert &&
+                    !isReplacingSigningCert
+                    ? 'Password stored securely'
+                    : 'Enter certificate password'
+                }
+                disabled={
+                  hasExistingSigningCert &&
+                  !isReplacingSigningCert
+                }
+                visibilityToggle={
+                  !hasExistingSigningCert ||
+                  isReplacingSigningCert
+                }
+              />
             </Form.Item>
           </Col>
         </Row>
@@ -262,21 +303,24 @@ const SamlConfigForm = ({
         isTestReady={isTestReady}
         testLoading={testLoading}
         testResult={testResult}
-        onTest={onTest}
+        onTest={data => onTest(data)}
       />
     </>
   );
 };
 
 SamlConfigForm.propTypes = {
-  signAuthn:         PropTypes.bool.isRequired,
+  signAuthn: PropTypes.bool.isRequired,
+  hasExistingCert: PropTypes.bool,
+  isReplacingSigningCert: PropTypes.bool,
+  hasExistingSigningCert: PropTypes.bool,
   onSignAuthnChange: PropTypes.func.isRequired,
-  onFileChange:      PropTypes.func.isRequired,
-  isTestReady:       PropTypes.bool.isRequired,
-  testLoading:       PropTypes.bool.isRequired,
-  onTest:            PropTypes.func.isRequired,
+  onFileChange: PropTypes.func.isRequired,
+  isTestReady: PropTypes.bool.isRequired,
+  testLoading: PropTypes.bool.isRequired,
+  onTest: PropTypes.func.isRequired,
   testResult: PropTypes.shape({
-    status:  PropTypes.string,
+    status: PropTypes.string,
     message: PropTypes.string,
   }),
 };

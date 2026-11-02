@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Modal, message } from 'antd';
-import { FILE_FIELDS, IDP_RESET_FIELDS, PROTOCOL_RESET_FIELDS } from '../constants/SsoConstants';
-import { validatePemOrDerCertFile, validatePkcs12File, FQDN } from '../utils/sso-integration-field-validator';
+import { FILE_FIELDS, IDP_RESET_FIELDS, PROTOCOL_RESET_FIELDS,FQDN } from '../constants/SsoConstants';
+import { validatePemOrDerCertFile, validatePkcs12File } from '../utils/sso-integration-field-validator';
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024;
 
@@ -16,6 +16,83 @@ const getRequiredFields = (protocol, authMethod) => {
   return ['idp', 'protocol'];
 };
 
+const isValidSamlConfiguration = (
+  values
+) => {
+  if (!values.sso_url) {
+    return true;
+  }
+
+  const samlUrlPattern =
+    /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/saml2$/i;
+
+  if (
+    !samlUrlPattern.test(
+      values.sso_url.trim()
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const validateRequiredField = (
+  field,
+  values,
+  files
+) => {
+
+  if (FILE_FIELDS.includes(field)) {
+
+    if (
+      field === 'saml_signing_cert' &&
+      files.saml_signing_cert === '__existing__'
+    ) {
+      return true;
+    }
+
+    return !!files[field];
+  }
+
+  if (field === 'certificate_password') {
+
+    if (
+      files.certificate === '__existing__'
+    ) {
+      return true;
+    }
+
+    return (
+      values[field] !== undefined &&
+      values[field] !== null &&
+      String(values[field]).trim() !== ''
+    );
+  }
+
+  if (field === 'entra_domain') {
+
+    const domains = String(
+      values[field] ?? ''
+    )
+      .split(',')
+      .map(d => d.trim().toLowerCase());
+
+    return domains.every(
+      d => FQDN.test(d)
+    );
+  }
+
+  const fieldValue = values[field];
+
+  return (
+    fieldValue !== undefined &&
+    fieldValue !== null &&
+    String(fieldValue).trim() !== ''
+  );
+};
+
+
 export const useSsoForm = (form) => {
   const [idp, setIdp] = useState(null);
   const [protocol, setProtocol] = useState(null);
@@ -28,28 +105,72 @@ export const useSsoForm = (form) => {
   const checkTestReady = (values, files) => {
     const selectedProtocol = values.protocol;
     const selectedAuthMethod = values.auth_method;
-    if (!selectedProtocol) return false;
-    if (selectedProtocol === 'oidc' && !selectedAuthMethod) return false;
-    if (selectedProtocol === 'oidc' && selectedAuthMethod === 'none') {
-      return !!(values.tenant_id && values.client_id && values.entra_domain);
+    if (!selectedProtocol) {
+      return false;
     }
-    if (selectedProtocol === 'saml' && values.sso_url) {
-      const samlUrlPattern = /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/saml2\?appid=[0-9a-f-]{36}$/i;
-      if (!samlUrlPattern.test(values.sso_url.trim())) return false;
+
+    if (
+      selectedProtocol === 'oidc' &&
+      !selectedAuthMethod
+    ) {
+      return false;
     }
-    let requiredFields = getRequiredFields(selectedProtocol, selectedAuthMethod);
-    if (selectedProtocol === 'saml' && values.sign_auth) {
-      requiredFields = [...requiredFields, 'saml_signing_cert', 'saml_signing_cert_password'];
+
+    if (
+      selectedProtocol === 'oidc' &&
+      selectedAuthMethod === 'none'
+    ) {
+      const ready = !!(
+        values.tenant_id &&
+        values.client_id &&
+        values.entra_domain
+      );
+      return ready;
     }
-    return requiredFields.every((field) => {
-      if (FILE_FIELDS.includes(field)) return !!files[field];
-      const fieldValue = values[field];
-      if (field === 'entra_domain') {
-        const domains = String(fieldValue ?? '').split(',').map((d) => d.trim().toLowerCase());
-        return domains.every((d) => FQDN.test(d));
+
+    if (
+      selectedProtocol === 'saml' &&
+      !isValidSamlConfiguration(values)
+    ) {
+      return false;
+    }
+
+    let requiredFields = getRequiredFields(
+      selectedProtocol,
+      selectedAuthMethod
+    );
+
+    if (
+      selectedProtocol === 'saml' &&
+      values.sign_auth
+    ) {
+
+      requiredFields.push(
+        'saml_signing_cert_password'
+      );
+
+      if (
+        !files.saml_signing_cert &&
+        files.saml_signing_cert !==
+        '__existing__'
+      ) {
+
+        requiredFields.push(
+          'saml_signing_cert'
+        );
       }
-      return fieldValue !== undefined && fieldValue !== null && String(fieldValue).trim() !== '';
-    });
+    }
+
+    const result = requiredFields.every(
+      (field) =>
+        validateRequiredField(
+          field,
+          values,
+          files
+        )
+    );
+
+    return result;
   };
 
   const resetTestState = (filesToKeep = {}) => {
@@ -73,14 +194,17 @@ export const useSsoForm = (form) => {
 
   const handleFileChange = useCallback(async (fieldName, e) => {
     const file = e.target.files?.[0];
+    const inputElement = e.target;
     if (!file) return;
     if (file.size === 0) {
-      e.target.value = '';
+      inputElement.value = '';
+      form.setFieldValue(fieldName, undefined);
       message.error('File is empty. Please upload a valid certificate file.');
       return;
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      e.target.value = '';
+      inputElement.value = '';
+      form.setFieldValue(fieldName, undefined);
       message.error(`File too large. Maximum size is ${MAX_FILE_SIZE_BYTES / 1024} KB.`);
       return;
     }
@@ -88,6 +212,12 @@ export const useSsoForm = (form) => {
       if (fieldName === 'saml_cert') await validatePemOrDerCertFile(file);
       if (fieldName === 'certificate' || fieldName === 'saml_signing_cert') await validatePkcs12File(file);
     } catch (error_) {
+      form.setFields([
+        {
+          name: fieldName,
+          value: undefined,
+        },
+      ]);
       message.error(error_.message);
       const cleaned = { ...fileValues };
       delete cleaned[fieldName];
@@ -124,18 +254,37 @@ export const useSsoForm = (form) => {
     form.setFieldsValue({ protocol: value });
   };
 
-  const handleProtocolChange = (value) => {
+    const handleProtocolChange = (
+    value,
+    onConfirmedChange
+  ) => {
     if (isEditMode && protocol && protocol !== value) {
+      const previousProtocol = protocol;
+      const previousTestReady = isTestReady;
       Modal.confirm({
         title: 'Change Protocol?',
-        content: 'Changing the protocol will clear all existing SSO configuration. Do you want to continue?',
-        onOk: () => { setIsTestReady(false); applyProtocolChange(value); },
+        content:
+          'Changing the protocol will clear all existing SSO configuration. Do you want to continue?',
+        onOk: () => {
+          onConfirmedChange?.();
+          setIsTestReady(false);
+          applyProtocolChange(value);
+        },
+        onCancel: () => {
+          form.setFieldsValue({
+            protocol: previousProtocol,
+          });
+          setProtocol(previousProtocol);
+          setIsTestReady(previousTestReady);
+        },
       });
       return;
     }
+    onConfirmedChange?.();
     setIsTestReady(false);
     applyProtocolChange(value);
   };
+
 
   const handleAuthMethodChange = (selectedMethod, onResetTest) => {
     setAuthMethod(selectedMethod);
