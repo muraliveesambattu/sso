@@ -641,7 +641,8 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
             data,
           } = await testSamlResultApi({ sessionRef });
 
-          if (status === 202 || data?.pending) {
+          // 401: this instance may not hold the session. Keep waiting.
+          if (status === 202 || status === 401 || data?.pending) {
             return;
           }
 
@@ -668,12 +669,7 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
             error,
           );
 
-          finish({
-            success: false,
-            message:
-              error.message ||
-              'Network error during SAML validation.',
-          });
+          // A failed check isn't a failed login. Try again on the next tick.
         } finally {
           requestInProgress = false;
         }
