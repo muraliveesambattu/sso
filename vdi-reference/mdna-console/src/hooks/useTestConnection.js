@@ -805,7 +805,7 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         const samlSessionRef = data.data?.sessionRef;
         const samlRedirectUrl = data.data?.redirectUrl;
 
-        if (isExistingTest || !samlSessionRef || !samlRedirectUrl) {
+        if (!samlSessionRef || !samlRedirectUrl) {
           return updateResult({
             success: true,
             message:

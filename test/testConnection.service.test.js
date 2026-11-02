@@ -592,7 +592,7 @@ describe('testConnection.service', () => {
       }));
     });
 
-    test('runs SAML discovery for a saved SAML config without opening a popup', async () => {
+    test('runs SAML discovery and opens a popup for a saved SAML config', async () => {
       ssoIntegration.findByPk.mockResolvedValue({ protocol: 'saml', entra_tenant_id: TENANT });
       SamlConfiguration.findOne.mockResolvedValue({
         sso_url: SSO_URL,
@@ -604,9 +604,31 @@ describe('testConnection.service', () => {
 
       const result = await validateSsoConfiguration('company-1');
 
-      expect(result).toEqual({ success: true, message: 'Connection successful — SAML IdP metadata reachable' });
-      expect(buildSamlRedirectUrl).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        message: 'Connection successful — SAML IdP metadata reachable',
+        data: {
+          protocol: 'saml',
+          sessionRef: expect.any(String),
+          redirectUrl: 'https://login.microsoftonline.com/t/saml2?SAMLRequest=abc',
+        },
+      });
+      expect(buildSamlRedirectUrl).toHaveBeenCalledWith(
+        expect.any(String), expect.any(String), SSO_URL, {}, result.data.sessionRef, undefined,
+        expect.objectContaining({ forceAuthn: true }),
+      );
       resolveSecret.mockImplementation((value) => (value ? `plain:${value}` : value));
+    });
+
+    test('opens no popup when the saved SAML config fails discovery', async () => {
+      ssoIntegration.findByPk.mockResolvedValue({ protocol: 'saml', entra_tenant_id: TENANT });
+      SamlConfiguration.findOne.mockResolvedValue({ sso_url: SSO_URL, certificate: 'stored-cert' });
+      mockRequest(https, samlResponder({ metadata: { statusCode: 500, body: 'oops' } }));
+
+      const result = await validateSsoConfiguration('company-1');
+
+      expect(result).toEqual({ success: false, message: 'Tenant not found or unreachable' });
+      expect(buildSamlRedirectUrl).not.toHaveBeenCalled();
     });
 
     test('treats an unsupported saved protocol as not found', async () => {

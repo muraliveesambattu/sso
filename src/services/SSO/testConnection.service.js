@@ -559,11 +559,13 @@ const validateSsoConfiguration = async (company_id) => {
       companyIdMasked: maskInput(String(company_id)),
       tenantIdMasked: maskInput(String(config.tenant_id)),
     });
-    return testSamlDiscovery({
+    const check = await testSamlDiscovery({
       tenant_id: config.tenant_id,
       sso_url: config.sso_url,
       certificate: config.certificate,
     });
+    if (!check.success) return check;
+    return { ...check, data: await buildSamlTestSession({ sso_url: config.sso_url, certificate: config.certificate }) };
   }
   return { success: false, message: 'Unknown protocol' };
 };
