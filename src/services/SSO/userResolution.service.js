@@ -1,21 +1,12 @@
 /**
  * User Resolution Service
- *
- * Post-authentication layer that runs after SAML/OIDC token validation.
- * Handles two modes based on the company's jit_enabled flag:
- *
- *   JIT ON  → auto-create user on first login; re-sync roles on every login
- *   JIT OFF → verify user is pre-provisioned; allow or deny with 403
- *
- * Both modes deny the login with 403 NO_ROLE_ASSIGNED when the user ends up
- * with no role — an unmatched JIT user (and no 'default' mapping), or a
- * pre-provisioned user whose record carries no roleId.
  */
-
 const crypto = require("node:crypto");
 const { logger } = require("../../config/logger");
 const { isEnabled } = require("../featureFlag.service");
+const { SAML_CLAIMS } = require('../../config/constants');
 const admin = require("firebase-admin");
+const { maskInput } = require('../../utils/shared/maskId.util');
 const {
   getSsoIntegrationByCompanyId,
   getJitMappings,
@@ -24,61 +15,56 @@ const {
   createUser,
   updateUser,
 } = require("../db/ssoDataService");
-// ── Claim Extractors ──────────────────────────────────────────────────────────
-/**
- * Normalises identity claims from either SAML attributes or OIDC id_token claims
- * into a consistent shape: { email, oid, displayName, groups }
- */
-// Normalize a SAML groups attribute (which may be an array, a single value,
-// or absent) into an array.
+
 const toGroupArray = (value) => {
   if (Array.isArray(value)) return value;
   return value ? [value] : [];
 };
-const normEmail = (v) => (typeof v === "string" ? v.trim().toLowerCase() : v);
-const SAML_EMAIL_URI =
-  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress";
-const SAML_ROLE_URI =
-  "http://schemas.microsoft.com/ws/2008/06/identity/claims/role";
-const SAML_GROUPS_URI =
-  "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups";
+
 // Email exactly as the IdP sent it — lookup fallback for Firestore users
 // stored with mixed case.
 const rawEmail = (claims) =>
   claims?.emailaddress ||
   claims?.email ||
-  claims?.[SAML_EMAIL_URI] ||
+  claims?.[SAML_CLAIMS.EMAIL] ||
   claims?.preferred_username ||
   claims?.upn ||
   null;
+
 const extractIdentity = (claims, protocol) => {
   if (protocol === "saml") {
-    const a = claims; // SAML attributes object (already extracted)
+    const a = claims;
+    const email =
+      (a[SAML_CLAIMS.EMAIL] ||
+        a.emailaddress ||
+        a.email ||
+        a.nameId?.value ||
+        a.name ||
+        null).toLowerCase().trim();
+
+    logger.debug("[SAML] extractIdentity | claim resolution", {
+      has_schema_email: !!a[SAML_CLAIMS.EMAIL],
+      has_emailaddress: !!a.emailaddress,
+      has_email: !!a.email,
+      has_nameId: !!a.nameId?.value,
+      hasResolvedEmail: !!email,
+      hasOid: !!(a.objectidentifier || a[SAML_CLAIMS.OID]),
+    });
+
     return {
-      email: normEmail(a.emailaddress || a.email || a[SAML_EMAIL_URI]) || null,
-      oid:
-        a.objectidentifier ||
-        a["http://schemas.microsoft.com/identity/claims/objectidentifier"] ||
-        null,
+      email,
+      oid: a.objectidentifier || a[SAML_CLAIMS.OID] || null,
       displayName: a.name || a.displayname || a.givenname || null,
-      groups: toGroupArray(a.groups || a[SAML_GROUPS_URI]),
-      department:
-        a.department ||
-        a["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department"] ||
-        null,
-      jobTitle:
-        a.jobtitle ||
-        a.jobTitle ||
-        a["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle"] ||
-        null,
-      appRoles: toGroupArray(a.role || a.roles || a[SAML_ROLE_URI]),
+      groups: toGroupArray(a.groups || a[SAML_CLAIMS.GROUPS]),
+      department: a.department || a[SAML_CLAIMS.DEPARTMENT] || null,
+      jobTitle: a.jobtitle || a.jobTitle || a[SAML_CLAIMS.JOB_TITLE] || null,
+      appRoles: toGroupArray(a.role || a.roles || a[SAML_CLAIMS.ROLE]),
       raw: a,
     };
   }
-  // OIDC — department/jobTitle are enriched from Graph by the token-exchange
-  // step (the id_token itself never carries them); `roles` is Entra app roles.
+
   return {
-    email: normEmail(claims.email || claims.preferred_username || claims.upn) || null,
+    email: (claims.email || claims.preferred_username || claims.upn || '').toLowerCase() || null,
     oid: claims.oid || claims.sub || null,
     displayName: claims.name || claims.preferred_username || null,
     groups: Array.isArray(claims.groups) ? claims.groups : [],
@@ -88,8 +74,9 @@ const extractIdentity = (claims, protocol) => {
     raw: claims,
   };
 };
-// ── Role Resolution ───────────────────────────────────────────────────────────
+
 const norm = (v) => (typeof v === "string" ? v.trim().toLowerCase() : v);
+
 const matchesMapping = (mapping, identity) => {
   switch (mapping.mapping_source) {
     case "group":
@@ -115,8 +102,7 @@ const matchesMapping = (mapping, identity) => {
       const matchedKey = rawKeys.find(
         (k) => norm(k) === norm(mapping.mapping_source),
       );
-      const raw =
-        matchedKey === undefined ? undefined : identity.raw[matchedKey];
+      const raw = matchedKey === undefined ? undefined : identity.raw[matchedKey];
       if (raw === undefined || raw === null) {
         logger.warn(
           "JIT mapping references a claim not present in the token — check the claim name spelling",
@@ -132,6 +118,7 @@ const matchesMapping = (mapping, identity) => {
     }
   }
 };
+
 const resolveRoles = async (companyId, identity) => {
   const mappings = await getJitMappings(companyId);
   const sorted = mappings.sort((a, b) => a.priority - b.priority);
@@ -153,14 +140,14 @@ const resolveRoles = async (companyId, identity) => {
     permissions: [],
   }));
 };
-// ── Role Denial ───────────────────────────────────────────────────────────────
+
 const denyNoRole = (companyId, protocol, identity, reason) => {
   logger.warn("Login denied — no role resolved for this user", {
     action: "login_denied_no_role",
-    company_id: companyId,
+    companyIdMasked: maskInput(String(companyId)),
     protocol,
-    email: identity.email,
-    oid: identity.oid,
+    hasemail: !!identity.email,
+    hasoid: !!identity.oid,
     reason,
   });
   const err = new Error("No role assigned to this user");
@@ -168,54 +155,84 @@ const denyNoRole = (companyId, protocol, identity, reason) => {
   err.code = "NO_ROLE_ASSIGNED";
   throw err;
 };
+
 function BuildCondition(user, claims) {
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
   if (user?.UUID) {
     return { condition: "UUID", value: user?.UUID };
   }
-  if (EMAIL_RE.test(claims?.preferred_username)) {
-    return { condition: "email", value: normEmail(claims?.preferred_username) };
+
+  const email =
+    (claims?.preferred_username ||
+      claims?.[SAML_CLAIMS.EMAIL] ||
+      claims?.emailaddress ||
+      claims?.email ||
+      claims?.nameId?.value)?.trim().toLowerCase();
+
+  if (EMAIL_RE.test(email)) {
+    return { condition: "email", value: email };
   }
+
   if (EMAIL_RE.test(user?.email)) {
-    return { condition: "email", value: normEmail(user?.email) };
+    return { condition: "email", value: user?.email };
   }
+
   return { condition: "email", value: "" };
 }
-// ── Main Export ───────────────────────────────────────────────────────────────
-/**
- * Resolves a user after successful SAML/OIDC authentication.
- *
- * @param {string} companyId     - company_id from SSO integration
- * @param {object} claims        - raw claims from SAML attributes or OIDC id_token
- * @param {string} protocol      - 'saml' | 'oidc'
- * @returns {{ user, roles, action }} - resolved user, assigned roles, and action taken
- */
+
+const buildFirstNameUpdate = (update, userData, claims, user) => {
+  if (userData.firstName !== "") return;
+  if (claims?.preferred_username?.includes("@")) {
+    update["firstName"] = claims.preferred_username.split("@")[0];
+  }
+  if (user?.email?.includes("@") && !update["firstName"]) {
+    update["firstName"] = user.email.split("@")[0];
+  }
+};
+
 const resolveUser = async (companyId, claims, protocol) => {
   const [integration, jitFlag] = await Promise.all([
     getSsoIntegrationByCompanyId(companyId),
     isEnabled(companyId, "jit_enabled").catch(() => false),
   ]);
+
+  logger.debug("[claims] SAML callback service received claims", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+  });
+
   if (!integration) {
     const err = new Error(`SSO integration not found for company: ${companyId}`);
     err.statusCode = 404;
     err.code = "INTEGRATION_NOT_FOUND";
     throw err;
   }
+
   const jitEnabled = integration.jit_status === true && jitFlag;
   if (integration.jit_status && !jitFlag) {
     logger.info("JIT provisioning disabled by feature flag", {
       action: "jit_flag_blocked",
-      company_id: companyId,
+      companyIdMasked: maskInput(String(companyId)),
     });
   }
-  // Step 2: Extract normalised identity
+
   const identity = extractIdentity(claims, protocol);
+
+  logger.debug('[SAML] Identity resolved', {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+    hasEmail: !!identity.email,
+    hasOid: !!identity.oid,
+  });
+
   if (!identity.oid || !identity.email) {
     const err = new Error("Identity claims missing required fields: oid and email");
     err.statusCode = 400;
     err.code = "MISSING_IDENTITY_CLAIMS";
     throw err;
   }
+
   // ── JIT ENABLED ──────────────────────────────────────────────────────────
   if (jitEnabled) {
     const roles = await resolveRoles(companyId, identity);
@@ -231,7 +248,11 @@ const resolveUser = async (companyId, claims, protocol) => {
         last_login: new Date().toISOString(),
       });
       action = "updated";
-      logger.debug("[JIT] User updated:", identity.email, "| roles:", roles.map((r) => r.role_id));
+      logger.debug("[JIT] User updated", {
+        companyIdMasked: maskInput(String(companyId)),
+        protocol,
+        action,
+      });
     } else {
       user = await createUser({
         user_id: crypto.randomUUID(),
@@ -245,12 +266,21 @@ const resolveUser = async (companyId, claims, protocol) => {
         last_login: new Date().toISOString(),
       });
       action = "created";
-      logger.debug("[JIT] User created:", identity.email, "| roles:", roles.map((r) => r.role_id));
+      logger.debug("[JIT] User created", {
+        companyIdMasked: maskInput(String(companyId)),
+        protocol,
+        action,
+      });
     }
     return { user, roles, action };
   }
+
   // ── JIT DISABLED (non-JIT) ───────────────────────────────────────────────
-  logger.debug("[NON-JIT] Looking up user | companyId:", companyId, "| email:", identity.email);
+  logger.debug("[NON-JIT] Starting user resolution", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+  });
+
   const usersRef = admin
     .firestore()
     .collection("tenants")
@@ -264,34 +294,73 @@ const resolveUser = async (companyId, claims, protocol) => {
   if (snapshot.empty && original && original !== identity.email) {
     snapshot = await usersRef.where("email", "==", original).limit(1).get();
   }
+
+  logger.debug("[NON-JIT] Firestore user lookup result", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+    found: !snapshot.empty,
+  });
+
   const user = snapshot.empty ? null : snapshot.docs[0].data();
+
   if (!user) {
-    logger.warn("[NON-JIT] User not found in Firestore | email:", identity.email, "| companyId:", companyId);
+    logger.warn("[NON-JIT] User not found in Firestore", {
+      companyIdMasked: maskInput(String(companyId)),
+      protocol,
+    });
     const err = new Error("You are not allowed to login using SSO");
     err.statusCode = 403;
     err.code = "USER_NOT_PROVISIONED";
     throw err;
   }
+
+  logger.debug("[NON-JIT] User found in Firestore", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+    loginMethod: user.loginMethod,
+    status: user.status,
+  });
+
   if (user.loginMethod !== "Entra SSO") {
-    logger.warn("[NON-JIT] Login method mismatch | loginMethod:", user.loginMethod);
+    logger.warn("[NON-JIT] Login method mismatch", {
+      companyIdMasked: maskInput(String(companyId)),
+      protocol,
+      expected: "Entra SSO",
+      actual: user.loginMethod,
+    });
     const err = new Error("You are not allowed to login using zDNA SSO");
     err.statusCode = 403;
     err.code = "LOGIN_METHOD_NOT_ALLOWED";
     throw err;
   }
+
   if (user.status === "expired") {
+    logger.warn("[NON-JIT] User account expired", {
+      companyIdMasked: maskInput(String(companyId)),
+      protocol,
+      hasemail: !!identity.email,
+    });
     const err = new Error("Your account has expired. Please contact your administrator");
     err.statusCode = 403;
     err.code = "USER_EXPIRED";
     throw err;
   }
+
   const roleId = user.roleId || user.role_id;
   if (!roleId) {
     return denyNoRole(companyId, protocol, identity, "user_has_no_role_id");
   }
+
+  logger.debug("[NON-JIT] Role resolved", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+    hasemail: !!identity.email,
+    hasroleId: !!roleId,
+  });
+
   const roles = [{ role_id: roleId, role_name: user.roleName || roleId, permissions: [] }];
-  // Step F — Update lastLoginAt + invited → joined
   const con = BuildCondition(user, claims);
+
   const currentTime = Date.now();
   const usersSnapshot = await admin
     .firestore()
@@ -301,6 +370,7 @@ const resolveUser = async (companyId, claims, protocol) => {
     .where(con.condition, "==", con.value)
     .limit(1)
     .get();
+
   if (!usersSnapshot.empty && con.value) {
     const userDoc = usersSnapshot.docs[0];
     const userData = userDoc.data();
@@ -310,14 +380,14 @@ const resolveUser = async (companyId, claims, protocol) => {
         lastLoginTime: currentTime,
         updatedDateTime: currentTime,
       };
-      if (userData.firstName === "") {
-        if (claims?.preferred_username?.includes("@")) {
-          update["firstName"] = claims.preferred_username.split("@")[0];
-        }
-        if (user?.email?.includes("@") && !update["firstName"]) {
-          update["firstName"] = user.email.split("@")[0];
-        }
-      }
+      buildFirstNameUpdate(update, userData, claims, user);
+
+      logger.debug("[NON-JIT] Updating Firestore login metadata", {
+        companyIdMasked: maskInput(String(companyId)),
+        protocol,
+        update,
+      });
+
       try {
         await Promise.all([
           userDoc.ref.update(update),
@@ -326,24 +396,28 @@ const resolveUser = async (companyId, claims, protocol) => {
             updatedDateTime: currentTime,
           }),
         ]);
+        logger.debug("[NON-JIT] Firestore login metadata updated successfully", {
+          companyIdMasked: maskInput(String(companyId)),
+          protocol,
+        });
       } catch (e) {
         logger.warn("[NON-JIT] Failed to update Firestore login metadata", {
-          company_id: companyId,
-          email: identity.email,
+          companyIdMasked: maskInput(String(companyId)),
+          protocol,
           error: e.message,
         });
       }
     }
   }
-  logger.debug(
-    "[NON-JIT] User login success | email:",
-    identity.email,
-    "| loginMethod:",
-    user.loginMethod,
-    "| roleId:",
-    roleId,
-  );
+
+  logger.debug("[NON-JIT] Login success", {
+    companyIdMasked: maskInput(String(companyId)),
+    protocol,
+    loginMethod: user.loginMethod,
+  });
+
   user["company_id"] = companyId;
   return { user, roles, action: "login" };
 };
+
 module.exports = { resolveUser };
