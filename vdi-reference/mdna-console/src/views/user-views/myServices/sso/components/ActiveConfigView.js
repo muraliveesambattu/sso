@@ -84,8 +84,14 @@ const ActiveConfigView = ({
 
   const [editingJit, setEditingJit] = useState(false);
   // Claims of the customer's Entra app, loaded in the background while the
-  // admin edits — rows are checked against them once they arrive.
-  const entraClaims = useEntraClaims({
+  // admin edits — rows are checked against them once they arrive. Save stays
+  // disabled until they have loaded, and while the lookup has failed.
+  const {
+    catalog: entraClaims,
+    status: entraStatus,
+    error: entraError,
+    retry: retryEntraClaims,
+  } = useEntraClaims({
     enabled: editingJit,
     companyId: tenantId,
     protocol: savedConfig.protocol,
@@ -385,11 +391,6 @@ const ActiveConfigView = ({
                         <Option key={r.value} value={r.value}>{r.label}</Option>
                       ))}
                     </Select>
-                    {mappingErrors[i] && (
-                      <div style={{ color: '#ff4d4f', fontSize: 11, marginTop: 2 ,position:'absolute'}}>
-                        {mappingErrors[i]}
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <span id={`role-value-${i + 1}`}>{m.zdna_role || '—'}</span>
@@ -431,8 +432,31 @@ const ActiveConfigView = ({
                   </Button>
                 )}
               </Col>
+              {/* Full row width, on its own line, so a long message never runs under the buttons below */}
+              {editingJit && mappingErrors[i] && (
+                <Col span={24}>
+                  <div id={`role-error-${i + 1}`} style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>
+                    {mappingErrors[i]}
+                  </div>
+                </Col>
+              )}
             </Row>
           ))}
+
+          {editingJit && entraStatus === 'error' && (
+            <div id="entra-claims-error" style={{ color: '#ff4d4f', fontSize: 12, marginTop: 12 }}>
+              {entraError}{' '}
+              <Button
+                id="entra-claims-retry"
+                type="link"
+                size="small"
+                onClick={retryEntraClaims}
+                style={{ padding: 0, height: 'auto', fontSize: 12 }}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
 
           {editingJit && (
             <div
@@ -463,8 +487,8 @@ const ActiveConfigView = ({
                 <Button
                   id="edit-jit-save"
                   type="primary"
-                  loading={saving}
-                  disabled={!isJitValid(true) || saving}
+                  loading={saving || entraStatus === 'loading'}
+                  disabled={!isJitValid(true) || saving || entraStatus !== 'ready'}
                   onClick={async () => {
                     // Await the parent update so the button keeps its spinner
                     // until the save resolves — closing the editor first left

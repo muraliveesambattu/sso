@@ -199,7 +199,7 @@ const SsoIntegrationPage = () => {
   const watchedTenantId = Form.useWatch('tenant_id', form);
   const watchedClientId = Form.useWatch('client_id', form);
   const watchedSsoUrl = Form.useWatch('sso_url', form);
-  const entraClaims = useEntraClaims({
+  const { catalog: entraClaims } = useEntraClaims({
     enabled: jitEnabled && testPassed,
     companyId: ownerTenantId,
     protocol,

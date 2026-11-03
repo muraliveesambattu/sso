@@ -42,20 +42,6 @@ const TestConnectionPanel = ({ isTestReady, testLoading, testResult, onTest }) =
       }}>
         {testResult.status === 'passed' ? '✓ ' : 'X '}
         {testResult.message}
-        {testResult.status === 'passed' && testResult.claims && (
-          <div id="test-connection-claims" style={{ marginTop: 6, fontSize: 12, fontWeight: 400, color: '#595959' }}>
-            <div>
-              Roles in your login:{' '}
-              {testResult.claims.roles.length ? testResult.claims.roles.join(', ') : 'none'}
-            </div>
-            <div>
-              Groups in your login:{' '}
-              {testResult.claims.groupsOverage
-                ? 'too many to list (group lookup needs Microsoft Graph)'
-                : (testResult.claims.groups.length ? `${testResult.claims.groups.length} (IDs)` : 'none')}
-            </div>
-          </div>
-        )}
       </div>
     )}
   </div>
@@ -68,11 +54,6 @@ TestConnectionPanel.propTypes = {
   testResult: PropTypes.shape({
     status: PropTypes.string,
     message: PropTypes.string,
-    claims: PropTypes.shape({
-      roles: PropTypes.arrayOf(PropTypes.string),
-      groups: PropTypes.arrayOf(PropTypes.string),
-      groupsOverage: PropTypes.bool,
-    }),
   }),
 };
 
