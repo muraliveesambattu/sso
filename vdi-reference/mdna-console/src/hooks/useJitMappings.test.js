@@ -110,11 +110,21 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('different roles sharing a claim name AND value is allowed', () => {
+  test('different roles sharing a claim name AND value are flagged on both rows', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Admin', 'group', 'same', 'r1'), row('Viewer', 'group', 'same', 'r2')])
     );
+    expect(result.current.mappingErrors[0]).toMatch(/Different roles with same Claim Name must have different Claim Value/);
+    expect(result.current.mappingErrors[1]).toMatch(/Different roles with same Claim Name must have different Claim Value/);
+    expect(result.current.isJitValid(true)).toBe(false);
+  });
+
+  test('same role twice with the same claim name AND value is allowed', () => {
+    const { result } = renderHook(() =>
+      useJitMappings([row('Manager', 'role', 'testing.login', 'r1'), row('Manager', 'role', 'testing.login', 'r2')])
+    );
     expect(result.current.mappingErrors).toEqual({});
+    expect(result.current.isJitValid(true)).toBe(true);
   });
 
   test('different roles sharing a claim name but different values is allowed', () => {
@@ -131,11 +141,12 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('same value in different case across roles is allowed', () => {
+  test('same value in different case across roles is flagged', () => {
     const { result } = renderHook(() =>
-      useJitMappings([row('Admin', 'group', '  Same  ', 'r1'), row('Viewer', 'group', 'same', 'r2')])
+      useJitMappings([row('Admin', 'group', '  Same  ', 'r1'), row('Viewer', 'GROUP', 'same', 'r2')])
     );
-    expect(result.current.mappingErrors).toEqual({});
+    expect(result.current.mappingErrors[0]).toMatch(/must have different Claim Value/);
+    expect(result.current.mappingErrors[1]).toMatch(/must have different Claim Value/);
   });
 
   test('isJitValid(false) short-circuits to true regardless of errors', () => {
