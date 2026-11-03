@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Card, Row, Col, Button, Tooltip, Select, Input, Modal } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { useJitMappings } from '../../../../../hooks/useJitMappings';
+import { useEntraClaims } from '../../../../../hooks/useEntraClaims';
 import { AuthContext } from 'auth/AuthProvider';
 import { getTenantId } from 'auth/FirebaseAuth';
 import { getRoleConfig } from '../../../../../firebase/fireStore/roleManagementDBMethods';
@@ -19,7 +20,9 @@ const metaLabel = {
 const metaValue = {
   fontSize: 13,
   fontWeight: 500,
-  color: '#1a1a2e'
+  color: '#1a1a2e',
+  wordBreak:'break-word',
+  overflowWrap:'break-word'
 };
 
 const StatusBadge = ({ status }) => (
@@ -80,6 +83,16 @@ const ActiveConfigView = ({
   }, [tenantId]);
 
   const [editingJit, setEditingJit] = useState(false);
+  // Claims of the customer's Entra app, loaded in the background while the
+  // admin edits — rows are checked against them once they arrive.
+  const entraClaims = useEntraClaims({
+    enabled: editingJit,
+    companyId: tenantId,
+    protocol: savedConfig.protocol,
+    tenantId: savedConfig.tenant_id,
+    clientId: savedConfig.client_id,
+    ssoUrl: savedConfig.sso_url,
+  });
   const {
     jitMappings,
     updateMapping,
@@ -92,7 +105,8 @@ const ActiveConfigView = ({
     (savedConfig.jitMappings || []).map(row => ({
       ...row,
       id: row.id || crypto.randomUUID(),
-    }))
+    })),
+    { entraClaims }
   );
 
   const handleRemoveClick = () => {
@@ -149,7 +163,8 @@ const ActiveConfigView = ({
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            marginBottom: 16
+            marginBottom: 16,
+            flexWrap:'wrap'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -226,7 +241,8 @@ const ActiveConfigView = ({
           justifyContent: 'flex-end',
           alignItems: 'center',
           gap: 12,
-          marginBottom: 20
+          marginBottom: 20,
+          flexWrap:'wrap'
         }}
       >
         {canManageSSO ? (
@@ -246,15 +262,14 @@ const ActiveConfigView = ({
             id="Deactivate-SSO"
             size="small"
             onClick={onDeactivate}
-            disabled={savedConfig?.sso_status === 'inactive'}
             style={{
               borderRadius: 6,
-              borderColor: savedConfig?.sso_status === 'inactive' ? '#d9d9d9' : '#0073E6',
-              color: savedConfig?.sso_status === 'inactive' ? '#bfbfbf' : '#0073E6',
-              backgroundColor: savedConfig?.sso_status === 'inactive' ? '#f5f5f5' : '#fff',
+              borderColor:  '#0073E6',
+              color:  '#0073E6',
+              backgroundColor:  '#fff',
             }}
           >
-            Deactivate SSO
+            {savedConfig?.sso_status === 'inactive' ? 'Activate SSO' :  "Deactivate SSO"}
           </Button>
         ) : (
           <PermissionRestricted type="customButton" title="Deactivate SSO" />
@@ -267,19 +282,19 @@ const ActiveConfigView = ({
             onClick={handleRemoveClick}
             style={{ borderRadius: 6 }}
           >
-            Remove SSO & JIT
+            Delete SSO
           </Button>
         ) : (
           <PermissionRestricted
             type="customButton"
             tooltipPlacement="top"
-            title="Remove SSO & JIT"
+            title="Remove SSO"
           />
         )}
       </div>
 
       {/* ROLE MAPPINGS */}
-      {savedConfig.jitEnabled && (
+      {savedConfig.jitEnabled && savedConfig.jitMappings?.length > 0 && (
         <div
           style={{
             border: '1px solid #f0f0f0',
@@ -292,7 +307,8 @@ const ActiveConfigView = ({
             style={{
               display: 'flex',
               justifyContent: 'space-between',
-              marginBottom: 16
+              marginBottom: 16,
+              flexWrap:'wrap'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -300,9 +316,9 @@ const ActiveConfigView = ({
                 id="role-mappings-title"
                 style={{ fontSize: 14, fontWeight: 600, color: '#1a1a2e' }}
               >
-                Role Mappings
+                SSO Role Mappings
               </span>
-              <Tooltip title="JIT role mapping rules">
+              <Tooltip title="SSO role mapping rules">
                 <InfoCircleOutlined style={{ color: '#0073E6', fontSize: 14 }} />
               </Tooltip>
             </div>
@@ -335,39 +351,34 @@ const ActiveConfigView = ({
             )}
           </div>
 
-          <Row style={{ marginBottom: 8 }}>
+          <Row style={{ marginBottom: 0,padding: '10px 12px',borderBottom:'1px solid #e8e8e8'}}>
             {['Role', 'Claim Name', 'Claim Value'].map((h, i) => (
-              <Col key={h} span={i === 3 ? 4 : 6}>
-                <span style={{ fontSize: 12, fontWeight: 500, color: '#8c8c8c' }}>
+              <Col key={h} span={8}>
+                <span style={{ fontSize: 15, fontWeight: 500, color: '#8c8c8c' }}>
                   {h}
                 </span>
               </Col>
             ))}
           </Row>
 
-          {!editingJit && !savedConfig.jitMappings?.length && (
-            <div id="role-mappings-empty" style={{ padding: '12px', fontSize: 13, color: '#8c8c8c' }}>
-              No role mappings configured. Click Manage roles to add one.
-            </div>
-          )}
-
           {(editingJit ? jitMappings : savedConfig.jitMappings).map((m, i) => (
             <Row
               key={m.id}
               style={{
-                padding: '8px 0',
-                borderTop: '1px solid #f5f5f5',
-                alignItems: 'flex-start'
+                padding: '12px',
+                backgroundColor:i%2 === 0 ? '#f5f5f5' : '#ffffff',
+                borderBottom: '1px solid #e8e8e8',
+                alignItems: 'center'
               }}
             >
-              <Col span={6}>
+              <Col span={editingJit?6:8}>
                 {editingJit ? (
                   <div>
                     <Select
                       id={`role-select-${i + 1}`}
                       value={m.zdna_role}
                       onChange={(v) => updateMapping(i, 'zdna_role', v)}
-                      style={{ width: '100%' }}
+                      style={{ width: '100%' ,position:'relative'}}
                       status={mappingErrors[i] ? 'error' : ''}
                     >
                       {roleData.map((r) => (
@@ -375,7 +386,7 @@ const ActiveConfigView = ({
                       ))}
                     </Select>
                     {mappingErrors[i] && (
-                      <div style={{ color: '#ff4d4f', fontSize: 11, marginTop: 2 }}>
+                      <div style={{ color: '#ff4d4f', fontSize: 11, marginTop: 2 ,position:'absolute'}}>
                         {mappingErrors[i]}
                       </div>
                     )}
@@ -384,7 +395,7 @@ const ActiveConfigView = ({
                   <span id={`role-value-${i + 1}`}>{m.zdna_role || '—'}</span>
                 )}
               </Col>
-              <Col span={6}>
+              <Col span={editingJit?7:8}>
                 {editingJit ? (
                   <Input
                     id={`claim-name-input-${i + 1}`}
@@ -396,7 +407,7 @@ const ActiveConfigView = ({
                   <span id={`claim-name-value-${i + 1}`}>{m.mapping_source || '—'}</span>
                 )}
               </Col>
-              <Col span={6}>
+              <Col span={editingJit?7:8}>
                 {editingJit ? (
                   <Input
                     id={`claim-value-input-${i + 1}`}
@@ -408,7 +419,7 @@ const ActiveConfigView = ({
                   <span id={`claim-value-display-${i + 1}`}>{m.mapping_value || '—'}</span>
                 )}
               </Col>
-              <Col span={4} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Col span={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {editingJit && (
                   <Button
                     id={`remove-role-btn-${i + 1}`}

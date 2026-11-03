@@ -16,6 +16,7 @@ const {
   handleCreateUser, handleUpdateUser, handleDeleteUser,
 } = require('../controllers/ssoUsers.controller');
 const { getFlags, updateFlag }  = require('../controllers/featureFlag.controller');
+const { handleGetEntraClaims, handleGetConsentUrl, handleConnectorCallback } = require('../controllers/entraConnector.controller');
 const { domainCheckLimiter, samlCallbackLimiter } = require('../middlewares/rateLimiter');
 const { requireAdminKey } = require('../middlewares/adminAuth.middleware');
 const { requireAdminKeyOrPermission, requireUser } = require('../middlewares/userAuth.middleware');
@@ -70,6 +71,17 @@ router.patch('/sso/config/:company_id/status', requireAdminKeyOrPermission('my_s
 // Delete SSO configuration (integration + OIDC/SAML + JIT mappings)
 // Protected: admin key or editable access to My Services
 router.delete('/sso/config/:company_id', requireAdminKeyOrPermission('my_services:editable'), handleDeleteSsoConfig);
+
+// Claim names, app roles and assigned groups of the customer's SSO app, read
+// from Microsoft Graph with the ZDNA connector app. Feeds the live checks on
+// role mappings. Protected: admin key or editable access to My Services
+router.post('/sso/entra-claims', requireAdminKeyOrPermission('my_services:editable'), handleGetEntraClaims);
+
+// Admin consent link for the ZDNA connector app in the customer's tenant
+router.get('/sso/entra-connector/consent-url', requireAdminKeyOrPermission('my_services:editable'), handleGetConsentUrl);
+
+// Entra returns here after the consent screen; answers with a plain "you can close this window" page
+router.get('/entra-connector/callback', handleConnectorCallback);
 
 // Domain check — entry point for both SAML and OIDC flows
 // Rate limited to 10 req/IP/min to prevent domain enumeration

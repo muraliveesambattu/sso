@@ -120,6 +120,21 @@ export const testConnectionApi = async (payload) =>
     REQUEST_TIMEOUT_MS
   );
 
+// ── Entra claims catalog — claim names, app roles and assigned groups of the ──
+// customer's SSO app, read through the ZDNA connector app. Raw { ok, status, data }
+// so the caller can read error.code (e.g. ENTRA_CONNECTOR_NOT_CONSENTED).
+export const getEntraClaimsApi = async (payload) =>
+  fetchWithRetry(
+    `${API_BASE_GATEWAY}/auth/sso/entra-claims`,
+    {
+      method: 'POST',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify(payload),
+    },
+    CRUD_TIMEOUT_MS,
+    0
+  );
+
 // ── OIDC test connection callback — called from parent window after popup ──────
 // Hits the SSO service DIRECTLY (public Entra redirect target). No admin key,
 // no gateway. Left as-is.

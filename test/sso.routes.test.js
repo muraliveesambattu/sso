@@ -43,6 +43,9 @@ describe('sso.routes', () => {
     const handleDeleteUser = jest.fn();
     const getFlags = jest.fn();
     const updateFlag = jest.fn();
+    const handleGetEntraClaims = jest.fn();
+    const handleGetConsentUrl = jest.fn();
+    const handleConnectorCallback = jest.fn();
 
     jest.doMock('express', () => expressMock);
     jest.doMock('../src/controllers/domianCheck.Controller', () => ({ domainCheck }));
@@ -66,6 +69,11 @@ describe('sso.routes', () => {
       handleDeleteUser,
     }));
     jest.doMock('../src/controllers/featureFlag.controller', () => ({ getFlags, updateFlag }));
+    jest.doMock('../src/controllers/entraConnector.controller', () => ({
+      handleGetEntraClaims,
+      handleGetConsentUrl,
+      handleConnectorCallback,
+    }));
     jest.doMock('../src/middlewares/rateLimiter', () => ({ domainCheckLimiter, samlCallbackLimiter }));
     jest.doMock('../src/middlewares/adminAuth.middleware', () => ({ requireAdminKey }));
     jest.doMock('../src/middlewares/userAuth.middleware', () => ({ requireAdminKeyOrPermission, requireUser }));
@@ -94,6 +102,11 @@ describe('sso.routes', () => {
     expect(routerMock.get).toHaveBeenCalledWith('/sso/config', permissionSentinels['my_services:view'], handleGetSsoConfig);
     expect(routerMock.patch).toHaveBeenCalledWith('/sso/config/:company_id/status', permissionSentinels['my_services:editable'], handleSetSsoStatus);
     expect(routerMock.delete).toHaveBeenCalledWith('/sso/config/:company_id', permissionSentinels['my_services:editable'], handleDeleteSsoConfig);
+
+    // Entra claims catalog (ZDNA connector): editable access; the consent callback is public
+    expect(routerMock.post).toHaveBeenCalledWith('/sso/entra-claims', permissionSentinels['my_services:editable'], handleGetEntraClaims);
+    expect(routerMock.get).toHaveBeenCalledWith('/sso/entra-connector/consent-url', permissionSentinels['my_services:editable'], handleGetConsentUrl);
+    expect(routerMock.get).toHaveBeenCalledWith('/entra-connector/callback', handleConnectorCallback);
 
     // Login-flow endpoints unchanged
     expect(routerMock.post).toHaveBeenCalledWith('/domain-check', domainCheckLimiter, domainCheck);

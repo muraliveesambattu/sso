@@ -152,3 +152,66 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 });
+
+describe('useJitMappings — checked against the Entra app (live)', () => {
+  const GROUP_ID = 'aaaaaaaa-1111-2222-3333-444444444444';
+  const entraClaims = {
+    claimNames: ['role', 'roles', 'group', 'groups', 'department', 'jobtitle', 'employeeType'],
+    roles: ['Zebra.Admin', 'Zebra.Viewer'],
+    groups: [{ id: GROUP_ID, name: 'ZDNA Admins' }],
+  };
+  const render = (rows, claims = entraClaims) =>
+    renderHook(() => useJitMappings(rows, { entraClaims: claims }));
+
+  test('accepts claim names and values that exist in the Entra app', () => {
+    const { result } = render([
+      row('Admin', 'Role', ' zebra.admin ', 'r1'),
+      row('Viewer', 'groups', GROUP_ID, 'r2'),
+      row('Viewer', 'group', 'zdna admins', 'r3'),
+      row('Viewer', 'department', 'Any department', 'r4'),
+      row('Viewer', 'employeetype', 'Contractor', 'r5'),
+    ]);
+    expect(result.current.mappingErrors).toEqual({});
+    expect(result.current.isJitValid(true)).toBe(true);
+  });
+
+  test('flags a claim name the Entra app does not send', () => {
+    const { result } = render([row('Admin', 'rol', 'Zebra.Admin', 'r1')]);
+    expect(result.current.mappingErrors[0]).toMatch(/Claim "rol" is not configured for this app/);
+    expect(result.current.isJitValid(true)).toBe(false);
+  });
+
+  test('flags several claim names typed into one row', () => {
+    const { result } = render([row('Admin', 'GROUP, dept', 'x', 'r1')]);
+    expect(result.current.mappingErrors[0]).toMatch(/is not configured for this app/);
+  });
+
+  test('flags a role value that is not an app role', () => {
+    const { result } = render([row('Admin', 'role', 'Zebra.Owner', 'r1')]);
+    expect(result.current.mappingErrors[0]).toMatch(/"Zebra.Owner" is not an app role/);
+  });
+
+  test('flags a group that is not assigned to the app (ids match exactly)', () => {
+    const { result } = render([row('Admin', 'group', GROUP_ID.toUpperCase(), 'r1')]);
+    expect(result.current.mappingErrors[0]).toMatch(/is not a group assigned to this app/);
+  });
+
+  test('flags a claim name longer than 30 characters', () => {
+    const { result } = render([row('Admin', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role', 'Zebra.Admin', 'r1')]);
+    expect(result.current.mappingErrors[0]).toMatch(/30 characters or fewer/);
+  });
+
+  test('re-checks as the admin types', () => {
+    const { result } = render([row('Admin', 'role', 'Zebra.Own', 'r1')]);
+    expect(result.current.isJitValid(true)).toBe(false);
+    act(() => result.current.updateMapping(0, 'mapping_value', 'Zebra.Viewer'));
+    expect(result.current.mappingErrors).toEqual({});
+    expect(result.current.isJitValid(true)).toBe(true);
+  });
+
+  test('skips the Entra check when no catalog is given', () => {
+    const { result } = renderHook(() => useJitMappings([row('Admin', 'anything', 'x', 'r1')]));
+    expect(result.current.mappingErrors).toEqual({});
+    expect(result.current.isJitValid(true)).toBe(true);
+  });
+});

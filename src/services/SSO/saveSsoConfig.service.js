@@ -3,10 +3,10 @@ const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
 
 // Validation patterns/allow-lists.
 const ALLOWED_PROTOCOLS = ['oidc', 'saml'];
-const TENANT_ALIASES    = new Set(['common', 'consumers', 'organizations']);
+const TENANT_ALIASES = new Set(['common', 'consumers', 'organizations']);
 const DOMAIN_RE = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-const UUID_RE   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const URL_RE    = /^https?:\/\/.+/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const URL_RE = /^https?:\/\/.+/;
 
 const { isCertAuth } = require('../../utils/shared/authMethod.util');
 
@@ -102,18 +102,40 @@ const validateJitMappings = (jit_enabled, jit_mappings) => {
   }
 };
 
+// Every mapping must name a claim, and for role/group a value, that the
+// customer's Entra app actually has — read from Graph via the ZDNA connector
+// (entraClaimsCatalog.service). The console runs the same check live; this
+// keeps direct API calls to the same rule. A server without the connector
+// configured skips the check rather than blocking every save.
+const validateJitClaimsInEntra = async (payload) => {
+  const { jit_enabled, jit_mappings, protocol, tenant_id, client_id, sso_url, entity_id } = payload;
+  if (!jit_enabled || !Array.isArray(jit_mappings)) return;
+  const rows = jit_mappings.filter(m => m.zdna_role && m.mapping_source);
+  if (rows.every(m => String(m.mapping_source).trim().toLowerCase() === 'default')) return;
+
+  // Lazy require — keeps module load free of the outbound HTTPS client.
+  const catalogService = require('./entraClaimsCatalog.service');
+  if (!catalogService.isConnectorConfigured()) {
+    logger.warn('[SAVE-SSO] ZDNA connector not configured — Entra claim check skipped', { action: 'jit_claims_unchecked' });
+    return;
+  }
+  const catalog = await catalogService.getEntraClaimsCatalog({ protocol, tenant_id, client_id, sso_url, entity_id });
+  catalogService.validateMappingsAgainstCatalog(rows, catalog);
+};
+
 // Normalises validated mappings once for BOTH stores: lowercases the source
 // and resolves priority — the frontend's explicit `order` wins when every row
 // has a unique finite order; otherwise array position decides (as before).
 const normalizeJitMappings = (jit_mappings) => {
   if (!Array.isArray(jit_mappings)) return jit_mappings;
   const rows = jit_mappings.filter(m => m.zdna_role && m.mapping_source);
-  const orders   = rows.map(m => Number(m.order));
+  const orders = rows.map(m => Number(m.order));
   const useOrder = rows.length > 0 && orders.every(Number.isFinite) && new Set(orders).size === rows.length;
   return rows.map((m, i) => ({
     ...m,
     mapping_source: String(m.mapping_source).trim().toLowerCase(),
-    priority:       useOrder ? Number(m.order) : i + 1,
+    mapping_value: typeof m.mapping_value === 'string' ? m.mapping_value.trim() : m.mapping_value,
+    priority: useOrder ? Number(m.order) : i + 1,
   }));
 };
 
@@ -144,7 +166,27 @@ const extractCert = async (protocol, auth_method, certificate, certificate_passw
   logger.debug('[SAVE-SSO] Extracted private key + thumbprint from PKCS#12');
   return { private_key_b64: privateKeyB64, client_cert_thumbprint: thumbprintHex };
 };
+const extractSamlSigningCert = async (
+  signing_certificate,
+  signing_certificate_password
+) => {
 
+  if (!signing_certificate) {
+    return {
+      sp_private_key_b64: undefined,
+    };
+  }
+
+  const { privateKeyB64 } =
+    await extractFromPkcs12(
+      signing_certificate,
+      signing_certificate_password
+    );
+
+  return {
+    sp_private_key_b64: privateKeyB64,
+  };
+};
 // Admins may paste the SSO URL with ?appid=<application-id> — used by
 // test-connection to verify the app's signing certificate ownership. The
 // login redirect builder appends its own '?SAMLRequest=...' (hardcoded '?'),
@@ -172,7 +214,7 @@ const saveToPostgres = async (company_id, fields) => {
   // (the store reuses an existing row's id when a domain already existed).
   const saved = await getSsoIntegrationByDomain(fields.domains[0]);
   const resolvedCompanyId = saved ? saved.company_id : company_id;
-  logger.debug(`[SAVE-SSO] Persisted to PostgreSQL | company_id: ${resolvedCompanyId}`);
+  logger.debug(`[SAVE-SSO] Persisted to PostgreSQL`);
   return resolvedCompanyId;
 };
 
@@ -200,24 +242,34 @@ const saveToPostgres = async (company_id, fields) => {
  * @returns {Promise<{ success: boolean, company_id: string, message: string }>}
  * @throws {Error} statusCode:400 — MISSING_PROTOCOL | MISSING_DOMAINS | INVALID_PROTOCOL |
  *                 INVALID_DOMAINS | MISSING_TENANT_ID | INVALID_TENANT_ID | MISSING_SSO_URL |
- *                 INVALID_SSO_URL | INVALID_PKCS12 | NO_PRIVATE_KEY
+ *                 INVALID_SSO_URL | INVALID_PKCS12 | NO_PRIVATE_KEY |
+ *                 INVALID_CLAIM_NAME | INVALID_CLAIM_VALUE
+ * @throws {Error} statusCode:403/404/502 — ENTRA_CONNECTOR_NOT_CONSENTED | ENTRA_APP_NOT_FOUND |
+ *                 ENTRA_LOOKUP_FAILED (JIT mappings could not be checked against Entra)
  */
 const saveSsoConfig = async (payload) => {
   const {
     protocol, idp, domains, tenant_id, company_id,
-    client_id, auth_method, client_secret, redirect_uri,
+    client_id, app_id, auth_method, client_secret, redirect_uri,
     sso_url, entity_id, acs_url, certificate, certificate_password,
-    sign_auth, keep_existing_cert,
-    jit_enabled, jit_mappings, existing_sso_status,
+    sign_auth, use_existing_signing_cert, use_existing_cert, signing_certificate, signing_certificate_password,
+    jit_enabled, jit_mappings,existing_sso_status
   } = payload;
-
+  logger.debug('saveconfig service file[payload]');
   validateRequiredFields(payload);
   validateJitMappings(jit_enabled, jit_mappings);
+  await validateJitClaimsInEntra(payload);
   const normalizedJitMappings = normalizeJitMappings(jit_mappings);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
   const { private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint } =
     await extractCert(protocol, auth_method, certificate, certificate_password);
+  const {
+    sp_private_key_b64,
+  } = await extractSamlSigningCert(
+    signing_certificate,
+    signing_certificate_password
+  );
 
   const domainList = (Array.isArray(domains) ? domains : [domains]).map(d => d.toLowerCase());
 
@@ -229,23 +281,24 @@ const saveSsoConfig = async (payload) => {
   const fields = {
     protocol, idp, domains: domainList,
     tenant_id, entra_tenant_id: entraTenantId, entraTenantId,
-    client_id, auth_method, client_secret, redirect_uri,
+    client_id, app_id, auth_method, client_secret, redirect_uri,
     // Strip ?appid=... (and any other query) here so the persisted URL carries
     // no query string — the login redirect builder appends its own
     // '?SAMLRequest=...' (a verbatim URL would double the '?' → AADSTS750054).
     sso_url: stripUrlQuery(sso_url), entity_id, acs_url, certificate,
-    sign_auth: sign_auth || false,
+    sign_auth: sign_auth || false,sp_private_key_b64,
     private_key_b64: privateKeyB64, client_cert_thumbprint: clientCertThumbprint,
-    keep_existing_cert: !!keep_existing_cert,
-    jit_enabled, jit_mappings: normalizedJitMappings, existing_sso_status,
+    keep_existing_cert: !!use_existing_cert,
+    keep_existing_signing_cert: !!use_existing_signing_cert,
+    jit_enabled, jit_mappings: normalizedJitMappings,existing_sso_status
   };
 
   const savedCompanyId = await saveToPostgres(company_id, fields);
 
   return {
-    success:    true,
+    success: true,
     company_id: savedCompanyId,
-    message:    'SSO configuration saved and activated successfully',
+    message: 'SSO configuration saved and activated successfully',
   };
 };
 

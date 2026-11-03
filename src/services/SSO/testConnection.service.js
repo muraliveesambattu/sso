@@ -570,4 +570,4 @@ const validateSsoConfiguration = async (company_id) => {
   return { success: false, message: 'Unknown protocol' };
 };
 
-module.exports = { testConnection, validateSsoConfiguration };
+module.exports = { testConnection, validateSsoConfiguration, validateTenantOwnership };

@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { useSsoForm } from '../../../../hooks/useSsoForm';
 import { readFileAsBase64, useTestConnection } from '../../../../hooks/useTestConnection';
 import { useJitMappings } from '../../../../hooks/useJitMappings';
+import { useEntraClaims } from '../../../../hooks/useEntraClaims';
 import { activateSso, deleteSsoConfig, getSsoConfig, saveConfigApi, saveSsoConfig, activateDeactivateSSO } from '../../../../services/ssoApi';
 import { AUTH_METHOD_MAP } from '../../../../constants/SsoConstants';
 import IdpProtocolSelector from './components/IdpProtocolSelector';
@@ -193,11 +194,25 @@ const SsoIntegrationPage = () => {
   const ownerTenantIdFromUser = getTenantId(currentUser);
   const ownerTenantId = ownerTenantIdFromUser || savedConfig?.ownerTenantId;
 
+  // Claims of the Entra app being configured, loaded in the background once
+  // Test Connection has passed — the mapping rows are checked against them.
+  const watchedTenantId = Form.useWatch('tenant_id', form);
+  const watchedClientId = Form.useWatch('client_id', form);
+  const watchedSsoUrl = Form.useWatch('sso_url', form);
+  const entraClaims = useEntraClaims({
+    enabled: jitEnabled && testPassed,
+    companyId: ownerTenantId,
+    protocol,
+    tenantId: watchedTenantId?.trim(),
+    clientId: watchedClientId?.trim(),
+    ssoUrl: watchedSsoUrl?.trim(),
+  });
+
   const {
     jitMappings, updateMapping, addMapping,
     removeMapping, resetMappings, isJitValid,
     mappingErrors: allMappingErrors,
-  } = useJitMappings();
+  } = useJitMappings(undefined, { entraClaims });
 
   const handleCancel = () => {
     form.resetFields();
