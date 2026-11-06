@@ -540,6 +540,9 @@ const validateSsoConfiguration = async (company_id) => {
       tenantIdMasked: maskInput(String(config.tenant_id)),
       success: check.success,
     });
+    // A failed pre-check (bad secret, unreachable tenant) must stop activation
+    // here: no login session is created and nothing is stored in tcStore.
+    if (!check.success) return check;
     const payload = {
       tenant_id: config.tenant_id,
       client_id: config.client_id,

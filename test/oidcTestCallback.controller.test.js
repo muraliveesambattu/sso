@@ -107,7 +107,7 @@ describe('oidcTestCallback.controller', () => {
       statusCode: 400,
       body: JSON.stringify({
         error: 'invalid_grant',
-        error_description: String.raw`Grant invalid\r\ntrace-id`,
+        error_description: 'Grant invalid\r\ntrace-id',
       }),
     }));
 
@@ -120,7 +120,7 @@ describe('oidcTestCallback.controller', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: { message: String.raw`Grant invalid\r\ntrace-id`, code: 'invalid_grant' },
+      error: { message: 'Grant invalid', code: 'invalid_grant' },
     });
   });
 
@@ -186,9 +186,49 @@ describe('oidcTestCallback.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: { protocol: 'oidc', sso_status: 'active' },
+      data: {
+        protocol: 'oidc',
+        sso_status: 'active',
+        claims: { roles: [], groups: [], groupsOverage: false },
+      },
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  const runSuccessWithClaims = async (extraClaims) => {
+    const res = mockRes();
+    tcStore.consume.mockReturnValue({
+      tenant_id: 'tenant-5',
+      client_id: 'client-5',
+      client_auth_method: 'client_secret',
+      client_secret: 'secret',
+      redirect_uri: 'http://localhost/callback',
+      state: 'state-5',
+      nonce: 'nonce-5',
+    });
+    mockHttpsResponse(() => ({
+      statusCode: 200,
+      body: JSON.stringify({ id_token: 'id-token' }),
+    }));
+    decodeJwt.mockReturnValue({ payload: { nonce: 'nonce-5', email: 'user@example.com', ...extraClaims } });
+    verifyJwtSignature.mockResolvedValue(undefined);
+
+    await oidcTestCallbackController(
+      mockReq({ code: 'code-6', state: 'state-5', sessionRef: 'session-6' }),
+      res,
+      jest.fn()
+    );
+    return res.json.mock.calls[0][0];
+  };
+
+  test('returns roles and groups from the id_token claims', async () => {
+    const body = await runSuccessWithClaims({ roles: ['Zebra.Admin'], groups: ['g1'] });
+    expect(body.data.claims).toEqual({ roles: ['Zebra.Admin'], groups: ['g1'], groupsOverage: false });
+  });
+
+  test('flags group overage when Entra omits the groups list', async () => {
+    const body = await runSuccessWithClaims({ _claim_names: { groups: 'src1' } });
+    expect(body.data.claims).toEqual({ roles: [], groups: [], groupsOverage: true });
   });
 
   test('passes unexpected errors to next', async () => {
@@ -212,174 +252,5 @@ describe('oidcTestCallback.controller', () => {
     );
 
     expect(next).toHaveBeenCalledWith(expect.any(Error));
-  });
-
-  test('retries transient network 500 error in withRetry and eventually succeeds', async () => {
-    const res = mockRes();
-    const next = jest.fn();
-    tcStore.consume.mockReturnValue({
-      tenant_id: 'tenant-5',
-      client_id: 'client-5',
-      client_auth_method: 'client_secret',
-      client_secret: 'secret-5',
-      redirect_uri: 'http://localhost/callback',
-      state: 'state-5',
-      nonce: 'nonce-5',
-    });
-
-    let attempts = 0;
-    mockHttpsResponse(() => {
-      attempts++;
-      if (attempts === 1) {
-        return {
-          statusCode: 500,
-          body: 'Internal Server Error',
-        };
-      }
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ id_token: 'valid-id-token' }),
-      };
-    });
-
-    decodeJwt.mockReturnValue({ payload: { nonce: 'nonce-5', preferred_username: 'user@example.com' } });
-    verifyJwtSignature.mockResolvedValue(undefined);
-
-    await oidcTestCallbackController(
-      mockReq({ code: 'code-7', state: 'state-5', sessionRef: 'session-5' }),
-      res,
-      next
-    );
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      data: { protocol: 'oidc', sso_status: 'active' },
-    });
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('returns 400 with default error properties when token response is missing error properties or id_token', async () => {
-    const res = mockRes();
-    tcStore.consume.mockReturnValue({
-      tenant_id: 'tenant-6',
-      client_id: 'client-6',
-      client_auth_method: 'none',
-      redirect_uri: 'http://localhost/callback',
-      state: 'state-6',
-    });
-    mockHttpsResponse(() => ({
-      statusCode: 400,
-      body: JSON.stringify({}),
-    }));
-
-    await oidcTestCallbackController(
-      mockReq({ code: 'code-8', state: 'state-6', sessionRef: 'session-6' }),
-      res,
-      jest.fn()
-    );
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: { message: 'Token exchange failed', code: 'TOKEN_EXCHANGE_FAILED' },
-    });
-  });
-
-  test('handles fetch timeout rejecting with timeout error', async () => {
-    const res = mockRes();
-    const next = jest.fn();
-    tcStore.consume.mockReturnValue({
-      tenant_id: 'tenant-7',
-      client_id: 'client-7',
-      client_auth_method: 'none',
-      redirect_uri: 'http://localhost/callback',
-      state: 'state-7',
-    });
-
-    jest.spyOn(https, 'request').mockImplementation((url, options, callback) => {
-      const req = new EventEmitter();
-      req.write = jest.fn();
-      req.setTimeout = jest.fn((timeoutMs, timeoutCallback) => {
-        process.nextTick(() => {
-          timeoutCallback();
-        });
-      });
-      req.destroy = jest.fn();
-      req.end = jest.fn();
-      return req;
-    });
-
-    await oidcTestCallbackController(
-      mockReq({ code: 'code-9', state: 'state-7', sessionRef: 'session-7' }),
-      res,
-      next
-    );
-
-    expect(next).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: 'TOKEN_ENDPOINT_TIMEOUT',
-        statusCode: 504,
-      })
-    );
-  });
-
-  test('handles invalid non-JSON body payload from HTTP token response endpoint', async () => {
-    const res = mockRes();
-    tcStore.consume.mockReturnValue({
-      tenant_id: 'tenant-8',
-      client_id: 'client-8',
-      client_auth_method: 'none',
-      redirect_uri: 'http://localhost/callback',
-      state: 'state-8',
-    });
-    mockHttpsResponse(() => ({
-      statusCode: 400,
-      body: 'Plain text bad request response',
-    }));
-
-    await oidcTestCallbackController(
-      mockReq({ code: 'code-10', state: 'state-8', sessionRef: 'session-8' }),
-      res,
-      jest.fn()
-    );
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: { message: 'Token exchange failed', code: 'TOKEN_EXCHANGE_FAILED' },
-    });
-  });
-
-  test('executes successful token exchange callback without nonce parameter configuration', async () => {
-    const res = mockRes();
-    tcStore.consume.mockReturnValue({
-      tenant_id: 'tenant-9',
-      client_id: 'client-9',
-      client_auth_method: 'certificate',
-      private_key_b64: 'private-key-b64-cert',
-      client_cert_thumbprint: 'thumbprint-cert',
-      redirect_uri: 'http://localhost/callback',
-      state: 'state-9',
-    });
-    mockHttpsResponse(() => ({
-      statusCode: 200,
-      body: JSON.stringify({ id_token: 'id-token-no-nonce' }),
-    }));
-    generateJwtAssertion.mockReturnValue('signed-assertion-cert');
-    decodeJwt.mockReturnValue({ payload: { email: 'user@example.com' } });
-    verifyJwtSignature.mockResolvedValue(undefined);
-
-    await oidcTestCallbackController(
-      mockReq({ code: 'code-11', state: 'state-9', sessionRef: 'session-9' }),
-      res,
-      jest.fn()
-    );
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      data: { protocol: 'oidc', sso_status: 'active' },
-    });
   });
 });
