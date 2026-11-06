@@ -90,6 +90,7 @@ const SAML_CLAIMS = {
   DEPARTMENT:'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department',
   JOB_TITLE: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/jobtitle',
   ROLE:      'http://schemas.microsoft.com/ws/2008/06/identity/claims/role',
+  GROUPS:    'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups',
 };
 
 

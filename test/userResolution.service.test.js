@@ -115,6 +115,24 @@ describe('userResolution.service', () => {
     });
   });
 
+  test('reads SAML groups sent under the full Microsoft claim URI', async () => {
+    getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-saml', jit_status: true });
+    getJitMappings.mockResolvedValue([
+      { mapping_source: 'group', mapping_value: 'zdna-saml-admins', role_id: 'role-admin', priority: 1 },
+      { mapping_source: 'default', mapping_value: null, role_id: 'role-temporary', priority: 99 },
+    ]);
+    findUserByOid.mockResolvedValue(null);
+    createUser.mockResolvedValue({ user_id: 'saml-user-2', email: 'saml.uri@example.com' });
+
+    await resolveUser('company-saml', {
+      emailaddress: 'saml.uri@example.com',
+      objectidentifier: 'oid-saml-2',
+      'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups': ['zdna-saml-admins'],
+    }, 'saml');
+
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ roles: ['role-admin'] }));
+  });
+
   test('extracts SAML identity fields and single group values during JIT provisioning', async () => {
     getSsoIntegrationByCompanyId.mockResolvedValue({ company_id: 'company-saml', jit_status: true });
     getJitMappings.mockResolvedValue([
