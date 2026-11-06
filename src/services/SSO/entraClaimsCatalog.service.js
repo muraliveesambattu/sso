@@ -3,7 +3,8 @@
  * send, read from Microsoft Graph with the ZDNA connector app.
  *
  * The connector is a multi-tenant app owned by ZDNA. A customer admin grants
- * it admin consent once (Application.Read.All, Policy.Read.ApplicationConfiguration);
+ * it admin consent once (Application.Read.All, Policy.Read.ApplicationConfiguration,
+ * User.Read.All);
  * after that the backend gets an app-only token for the customer's tenant with
  * ZDNA's own credentials. No customer secret is needed, so SAML works too.
  *
@@ -20,12 +21,18 @@ const { maskInput } = require('../../utils/shared/maskId.util');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CLAIM_NAME_LENGTH = 30; // jit_mappings.mapping_source is VARCHAR(30)
+const MAX_DIRECTORY_USERS = 10000; // larger tenants: department/job title are not checked
 
 // Names the login code reads on its own (userResolution matchesMapping), so
 // they are valid for every app. 'default' is the fallback-only keyword.
 const BUILT_IN_CLAIM_NAMES = ['role', 'roles', 'group', 'groups', 'department', 'jobtitle'];
 const ROLE_NAMES  = new Set(['role', 'roles']);
 const GROUP_NAMES = new Set(['group', 'groups']);
+// Free-text user attributes: the value must be one some user in the tenant has.
+const USER_ATTRIBUTE_NAMES = {
+  department: { key: 'departments', label: 'department' },
+  jobtitle:   { key: 'jobTitles',   label: 'job title' },
+};
 
 const cache = new Map();
 
@@ -170,16 +177,56 @@ const getSamlClaimNames = async (token, spId) => {
   }
 };
 
+const addDistinct = (map, value) => {
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
+};
+
+// Department and job title are free text on each user, so the values Entra can
+// send are the distinct values across the tenant's users. Returns null when they
+// cannot be read — the connector was approved before User.Read.All was added, or
+// the tenant has more than MAX_DIRECTORY_USERS users — and the department/job
+// title check is then skipped (it cannot be verified). Never fails the catalog:
+// roles and groups still apply.
+const getUserAttributeValues = async (token) => {
+  try {
+    const departments = new Map();
+    const jobTitles = new Map();
+    let seen = 0;
+    let next = `${microsoft.graphV1}/users?$select=department,jobTitle&$top=999`;
+    while (next) {
+      const page = await graphGet(token, next);
+      for (const user of page?.value || []) {
+        addDistinct(departments, user.department);
+        addDistinct(jobTitles, user.jobTitle);
+      }
+      seen += page?.value?.length || 0;
+      next = page?.['@odata.nextLink'] || null;
+      if (next && seen >= MAX_DIRECTORY_USERS) {
+        logger.debug('[ENTRA_CATALOG] Too many users to list department and job title values');
+        return null;
+      }
+    }
+    return { departments: [...departments.values()], jobTitles: [...jobTitles.values()] };
+  } catch (err) {
+    logger.debug('[ENTRA_CATALOG] Users not readable', { code: err.code });
+    return null;
+  }
+};
+
 const buildCatalog = async (token, { protocol, appKey }) => {
   const sp = await findServicePrincipal(token, appKey);
   if (!sp) {
     throw catalogError('The SSO app was not found in Microsoft Entra', 'ENTRA_APP_NOT_FOUND', 404);
   }
 
-  const assignments = await graphGetAll(
-    token,
-    `${microsoft.graphV1}/servicePrincipals/${encodeURIComponent(sp.id)}/appRoleAssignedTo?$select=principalId,principalDisplayName,principalType&$top=999`,
-  );
+  const [assignments, userAttributes] = await Promise.all([
+    graphGetAll(
+      token,
+      `${microsoft.graphV1}/servicePrincipals/${encodeURIComponent(sp.id)}/appRoleAssignedTo?$select=principalId,principalDisplayName,principalType&$top=999`,
+    ),
+    getUserAttributeValues(token),
+  ]);
   const groups = assignments
     .filter((a) => a.principalType === 'Group')
     .map((a) => ({ id: a.principalId, name: a.principalDisplayName || null }));
@@ -197,13 +244,17 @@ const buildCatalog = async (token, { protocol, appKey }) => {
     claimNames: [...new Set([...BUILT_IN_CLAIM_NAMES, ...configured])],
     roles,
     groups,
+    userAttributes,
   };
 };
 
 /**
  * Reads the claims catalog for a customer's SSO app.
  *
- * @returns {Promise<{ claimNames: string[], roles: string[], groups: {id: string, name: string|null}[] }>}
+ * @returns {Promise<{ claimNames: string[], roles: string[], groups: {id: string, name: string|null}[],
+ *   userAttributes: { departments: string[], jobTitles: string[] } | null }>}
+ *   When userAttributes is present, department/jobtitle values must match a user's
+ *   value; when it is null the check is skipped.
  * @throws 503 ENTRA_CONNECTOR_NOT_CONFIGURED | 403 ENTRA_CONNECTOR_NOT_CONSENTED |
  *         404 ENTRA_APP_NOT_FOUND | 502 ENTRA_LOOKUP_FAILED | 400 INVALID_TENANT_ID / INVALID_CLIENT_ID
  */
@@ -263,6 +314,13 @@ const checkMappingAgainstCatalog = (mapping, catalog) => {
   if (GROUP_NAMES.has(name)
     && !catalog.groups.some((g) => g.id === value || (g.name && norm(g.name) === norm(value)))) {
     return `"${value}" is not a group assigned to this app in Microsoft Entra`;
+  }
+  const attribute = USER_ATTRIBUTE_NAMES[name];
+  if (attribute && catalog.userAttributes) {
+    const known = catalog.userAttributes[attribute.key] || [];
+    if (!known.some((v) => norm(v) === norm(value))) {
+      return `No user in Microsoft Entra has ${attribute.label} "${value}"`;
+    }
   }
   return null;
 };

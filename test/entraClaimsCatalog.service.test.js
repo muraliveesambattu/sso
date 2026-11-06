@@ -70,6 +70,12 @@ describe('entraClaimsCatalog.service', () => {
       { name: 'employeeid', namespace: 'http://schemas.zebra.com/claims' },
       { name: 'plant' },
     ] }]],
+    ['/v1.0/users?', [200, { value: [
+      { department: 'Sales', jobTitle: 'Manager' },
+      { department: ' sales ', jobTitle: null },
+      { department: 'IT', jobTitle: 'Engineer' },
+      { department: null, jobTitle: '' },
+    ] }]],
     ['servicePrincipals(appId=', [200, sp]],
     ['servicePrincipals?$filter=', [200, { value: [sp] }]],
   ];
@@ -142,6 +148,31 @@ describe('entraClaimsCatalog.service', () => {
     ]);
     const catalog = await getEntraClaimsCatalog({ protocol: 'oidc', tenant_id: TENANT, client_id: APP_ID });
     expect(catalog.groups.map((g) => g.id)).toEqual(['g1', 'g2']);
+  });
+
+  test('lists the distinct department and job title values of the tenant users', async () => {
+    route(happyPath);
+    const catalog = await getEntraClaimsCatalog({ protocol: 'oidc', tenant_id: TENANT, client_id: APP_ID });
+    expect(catalog.userAttributes).toEqual({ departments: ['Sales', 'IT'], jobTitles: ['Manager', 'Engineer'] });
+    expect(calls.find((c) => c.href.includes('/v1.0/users?')).href).toContain('$select=department,jobTitle');
+  });
+
+  test('leaves user attributes out, but keeps the catalog, when users cannot be read', async () => {
+    route([['/v1.0/users?', [403, {}]], ...happyPath]);
+    const catalog = await getEntraClaimsCatalog({ protocol: 'oidc', tenant_id: TENANT, client_id: APP_ID });
+    expect(catalog.userAttributes).toBeNull();
+    expect(catalog.roles).toEqual(['Zebra.Admin', 'Zebra.Viewer']);
+  });
+
+  test('leaves user attributes out when the tenant has too many users to list', async () => {
+    const page = { value: Array.from({ length: 999 }, () => ({ department: 'Sales' })) };
+    route([
+      ['/v1.0/users?', [200, { ...page, '@odata.nextLink': 'https://graph.microsoft.com/v1.0/users?$skiptoken=next' }]],
+      ...happyPath,
+    ]);
+    const catalog = await getEntraClaimsCatalog({ protocol: 'oidc', tenant_id: TENANT, client_id: APP_ID });
+    expect(catalog.userAttributes).toBeNull();
+    expect(calls.filter((c) => c.href.includes('/v1.0/users?')).length).toBe(11);
   });
 
   test('caches the catalog per tenant and app', async () => {
@@ -225,6 +256,35 @@ describe('entraClaimsCatalog.service', () => {
         .toThrow(expect.objectContaining({ code: 'INVALID_CLAIM_NAME', statusCode: 400 }));
       expect(() => validateMappingsAgainstCatalog([{ zdna_role: 'A', mapping_source: 'role', mapping_value: 'x' }], catalog))
         .toThrow(expect.objectContaining({ code: 'INVALID_CLAIM_VALUE' }));
+    });
+
+    describe('department and job title (DLM-103203)', () => {
+      const withUsers = { ...catalog, userAttributes: { departments: ['Sales', 'IT'], jobTitles: ['Manager'] } };
+      const checkUsers = (mapping_source, mapping_value) =>
+        checkMappingAgainstCatalog({ mapping_source, mapping_value }, withUsers);
+
+      test('accepts a value some user has, ignoring case and spaces', () => {
+        expect(checkUsers('department', ' sales ')).toBeNull();
+        expect(checkUsers('Department', 'IT')).toBeNull();
+        expect(checkUsers('jobtitle', 'MANAGER')).toBeNull();
+      });
+
+      test('rejects a value no user has', () => {
+        expect(checkUsers('department', 'Salse')).toBe('No user in Microsoft Entra has department "Salse"');
+        expect(checkUsers('jobtitle', 'Director')).toBe('No user in Microsoft Entra has job title "Director"');
+      });
+
+      test('blocks Save with INVALID_CLAIM_VALUE', () => {
+        expect(() => validateMappingsAgainstCatalog(
+          [{ zdna_role: 'Viewer', mapping_source: 'department', mapping_value: 'Salse' }], withUsers,
+        )).toThrow(expect.objectContaining({ code: 'INVALID_CLAIM_VALUE', statusCode: 400 }));
+      });
+
+      test('skips the check when user values could not be read', () => {
+        expect(checkMappingAgainstCatalog(
+          { mapping_source: 'department', mapping_value: 'Salse' }, { ...catalog, userAttributes: null },
+        )).toBeNull();
+      });
     });
   });
 });

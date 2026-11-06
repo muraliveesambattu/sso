@@ -435,6 +435,21 @@ describe('saveSsoConfig.service', () => {
       })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CLAIM_VALUE' });
     });
 
+    test('rejects a department no user in Entra has (DLM-103203)', async () => {
+      const { saveSsoConfig, pgSave } = loadService({
+        catalog: { ...catalog, userAttributes: { departments: ['Sales'], jobTitles: ['Manager'] } },
+      });
+      await expect(saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [{ mapping_source: 'department', mapping_value: 'Salse', zdna_role: 'Viewer' }],
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'INVALID_CLAIM_VALUE',
+        message: 'No user in Microsoft Entra has department "Salse"',
+      });
+      expect(pgSave).not.toHaveBeenCalled();
+    });
+
     test('does not call Entra when only the default mapping is set', async () => {
       const { saveSsoConfig, getEntraClaimsCatalog } = loadService({ catalog });
       await saveSsoConfig({ ...oidcBase, jit_mappings: [{ mapping_source: 'default', zdna_role: 'Viewer' }] });

@@ -9,12 +9,20 @@ const EMPTY_ROW = {
 const MAX_CLAIM_NAME_LENGTH = 30; // jit_mappings.mapping_source is VARCHAR(30)
 const ROLE_CLAIMS = new Set(['role', 'roles']);
 const GROUP_CLAIMS = new Set(['group', 'groups']);
+// Free-text user attributes: the value must be one some user in the tenant has.
+const USER_ATTRIBUTE_CLAIMS = {
+  department: { key: 'departments', label: 'department' },
+  jobtitle: { key: 'jobTitles', label: 'job title' },
+};
 
 const norm = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 
 // Same rules as the backend (entraClaimsCatalog.service checkMappingAgainstCatalog)
 // and as login matching, so a row that passes here is saved and can match at login.
-// entraClaims: { claimNames, roles, groups: [{ id, name }] } from useEntraClaims.
+// entraClaims: { claimNames, roles, groups: [{ id, name }],
+//   userAttributes: { departments, jobTitles } | null } from useEntraClaims.
+// userAttributes is null when Entra users can't be read; department and job
+// title are then not checked.
 export const checkAgainstEntra = (row, entraClaims) => {
   const name = norm(row.mapping_source);
   const value = (row.mapping_value || '').trim();
@@ -31,6 +39,13 @@ export const checkAgainstEntra = (row, entraClaims) => {
   if (GROUP_CLAIMS.has(name)
     && !entraClaims.groups.some((g) => g.id === value || (g.name && norm(g.name) === norm(value)))) {
     return `"${value}" is not a group assigned to this app in Microsoft Entra`;
+  }
+  const attribute = USER_ATTRIBUTE_CLAIMS[name];
+  if (attribute && entraClaims.userAttributes) {
+    const known = entraClaims.userAttributes[attribute.key] || [];
+    if (!known.some((v) => norm(v) === norm(value))) {
+      return `No user in Microsoft Entra has ${attribute.label} "${value}"`;
+    }
   }
   return null;
 };
