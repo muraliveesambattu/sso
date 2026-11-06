@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "source": ".",
+    "codebase": "zdna-sso",
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".claude",
+      "firebase-debug.log",
+      "firestore-debug.log"
+    ],
+    "runtime": "nodejs22"
+  },
+  "emulators": {
+    "functions": {
+      "port": 5009
+    }
+  }
+}

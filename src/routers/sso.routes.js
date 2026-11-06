@@ -1,0 +1,88 @@
+
+const express = require('express');
+const router  = express.Router();
+
+const { domainCheck }           = require('../controllers/domianCheck.Controller');
+const { samlCallbackController } = require('../controllers/samlCallback.Controller');
+const { handleOidcCallback }    = require('../controllers/oidcTokenExchange.controller');
+const { handleOidcRedirect }    = require('../controllers/oidcRedirect.controller');
+const { handleTestConnection }  = require('../controllers/testConnection.controller');
+const { oidcTestCallbackController } = require('../controllers/oidcTestCallback.controller');
+const { handleSamlTestResult } = require('../controllers/samlTestResult.controller');
+const { handleSaveSsoConfig }   = require('../controllers/saveSsoConfig.controller');
+const { handleGetSsoConfig, handleSetSsoStatus, handleDeleteSsoConfig } = require('../controllers/ssoAdmin.controller');
+const {
+  handleGetMe, handleListUsers,
+  handleCreateUser, handleUpdateUser, handleDeleteUser,
+} = require('../controllers/ssoUsers.controller');
+const { getFlags, updateFlag }  = require('../controllers/featureFlag.controller');
+const { domainCheckLimiter, samlCallbackLimiter } = require('../middlewares/rateLimiter');
+const { requireAdminKey } = require('../middlewares/adminAuth.middleware');
+const { requireAdminKeyOrPermission, requireUser } = require('../middlewares/userAuth.middleware');
+
+// Admin endpoints accept either X-Admin-API-Key (service path, any company) or
+// a Firebase ID token whose resolved permissions (RMS → Firestore roleConfig)
+// grant the named permission — token callers are scoped to their own
+// company_id (userAuth.middleware).
+
+// ── Feature Flags (platform admin only — never tenant-scoped) ─────────────────
+router.get('/admin/flags/:company_id', requireAdminKey, getFlags);
+router.post('/admin/flags',            requireAdminKey, updateFlag);
+
+// ── RBAC: current user, user provisioning ─────────────────────────────────────
+
+// Caller's own roles + permissions, fresh from the DB (Bearer token only)
+router.get('/sso/me', requireUser, handleGetMe);
+
+// Pre-provisioning CRUD — required for non-JIT companies
+router.get('/sso/users',             requireAdminKeyOrPermission('users:editable'), handleListUsers);
+router.post('/sso/users',            requireAdminKeyOrPermission('users:editable'), handleCreateUser);
+router.patch('/sso/users/:user_id',  requireAdminKeyOrPermission('users:editable'), handleUpdateUser);
+router.delete('/sso/users/:user_id', requireAdminKeyOrPermission('users:editable'), handleDeleteUser);
+
+// ── SSO configuration ─────────────────────────────────────────────────────────
+
+// SSO configuration test — Phase 1: verifies credentials against Microsoft Entra,
+// returns { config, sessionRef } for the browser popup flow (secrets stay in tcStore)
+// Protected: admin key or editable access to My Services
+router.post('/test-connection', requireAdminKeyOrPermission('my_services:editable'), handleTestConnection);
+
+// SSO configuration test — Phase 2: parent window posts { code, state, sessionRef }
+// after the Azure popup returns. No admin key — single-use sessionRef is the credential.
+router.post('/test-connection/oidc/callback', oidcTestCallbackController);
+
+// SAML test popup: parent window posts { sessionRef } after the popup closes.
+// No admin key — single-use sessionRef is the credential (same model as the OIDC callback).
+router.post('/test-connection/saml/result', handleSamlTestResult);
+
+// Save & activate SSO configuration with optional JIT mappings
+// Protected: admin key or editable access to My Services
+router.post('/sso/save', requireAdminKeyOrPermission('my_services:editable'), handleSaveSsoConfig);
+
+// Retrieve full SSO config by company_id or domain (secrets masked)
+// Protected: admin key or view access to My Services (token callers get their own company)
+router.get('/sso/config', requireAdminKeyOrPermission('my_services:view'), handleGetSsoConfig);
+
+// Activate / deactivate SSO for a company
+// Protected: admin key or editable access to My Services
+router.patch('/sso/config/:company_id/status', requireAdminKeyOrPermission('my_services:editable'), handleSetSsoStatus);
+
+// Delete SSO configuration (integration + OIDC/SAML + JIT mappings)
+// Protected: admin key or editable access to My Services
+router.delete('/sso/config/:company_id', requireAdminKeyOrPermission('my_services:editable'), handleDeleteSsoConfig);
+
+// Domain check — entry point for both SAML and OIDC flows
+// Rate limited to 10 req/IP/min to prevent domain enumeration
+router.post('/domain-check', domainCheckLimiter, domainCheck);
+
+// SAML ACS (Assertion Consumer Service) callback from Microsoft Entra
+router.post('/callback', samlCallbackLimiter, samlCallbackController);
+
+// OIDC Step 1 — Entra redirects browser here with authorization code
+// Relays code + state to frontend, frontend then calls /oidc/token-exchange
+router.get('/oidc/callback', handleOidcRedirect);
+
+// OIDC Step 2 — Frontend sends code here for server-to-server token exchange
+router.post('/oidc/token-exchange', handleOidcCallback);
+
+module.exports = router;
