@@ -46,10 +46,15 @@ const microsoft = {
   samlSsoUrl:      (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/saml2`,
   samlIssuer:      (tenant) => `${MS_STS_BASE}/${encodeURIComponent(tenant)}/`,
 
+  // ZDNA connector app — admin consent for a customer tenant (one-time, per tenant)
+  adminConsentUrl: (tenant) => `${MS_LOGIN_BASE}/${encodeURIComponent(tenant)}/v2.0/adminconsent`,
+
   // Microsoft Graph
   graphMemberOf: `${MS_GRAPH_BASE}/v1.0/me/memberOf?$select=id,securityEnabled`,
   graphMe:       `${MS_GRAPH_BASE}/v1.0/me?$select=department,jobTitle`,
   graphScope:    `${MS_GRAPH_BASE}/.default`,
+  graphV1:       `${MS_GRAPH_BASE}/v1.0`,
+  graphBeta:     `${MS_GRAPH_BASE}/beta`,
 
   // Issuer validation pattern for the OIDC `iss` claim (tenant-bound v2.0 issuer)
   issuerPattern: /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]{36}\/v2\.0$/,
@@ -74,6 +79,9 @@ const defaults = {
   SAML_ENTITY_ID:    process.env.SAML_ENTITY_ID    || 'https://zdna-sso.web.app/auth/metadata2',
   SAML_ACS_URL:      process.env.SAML_ACS_URL      || 'https://zdna-sso.web.app/auth/callback',
   FRONTEND_URL:      process.env.FRONTEND_URL      || 'http://localhost:3000',
+  // Where Entra sends the admin back after consenting to the ZDNA connector app.
+  // Must be registered as a redirect URI on that app.
+  ENTRA_CONNECTOR_REDIRECT_URI: process.env.ENTRA_CONNECTOR_REDIRECT_URI || 'http://localhost:5000/auth/entra-connector/callback',
 };
 
 const SAML_CLAIMS = {

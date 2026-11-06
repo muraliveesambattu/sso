@@ -5,6 +5,7 @@ const loadService = ({
   pgSaveImpl,
   getByDomainImpl,
   extractImpl,
+  catalog,
 } = {}) => {
   jest.resetModules();
 
@@ -42,8 +43,17 @@ const loadService = ({
     getSsoIntegrationByDomain,
   }));
 
+  // `catalog` switches the ZDNA connector on and returns this Entra claims
+  // catalog; without it the connector is unconfigured and the check is skipped.
+  const getEntraClaimsCatalog = jest.fn(async () => catalog);
+  jest.doMock('../src/services/SSO/entraClaimsCatalog.service', () => ({
+    ...jest.requireActual('../src/services/SSO/entraClaimsCatalog.service'),
+    isConnectorConfigured: () => Boolean(catalog),
+    getEntraClaimsCatalog,
+  }));
+
   const { saveSsoConfig } = require('../src/services/SSO/saveSsoConfig.service');
-  return { saveSsoConfig, extractFromPkcs12, pgSave, getSsoIntegrationByDomain };
+  return { saveSsoConfig, extractFromPkcs12, pgSave, getSsoIntegrationByDomain, getEntraClaimsCatalog };
 };
 
 // The row handed to pgSave (company_id + derived fields).
@@ -360,5 +370,90 @@ describe('saveSsoConfig.service', () => {
     })).rejects.toThrow('db unavailable');
 
     expect(pgSave).toHaveBeenCalled();
+  });
+
+  describe('JIT mappings checked against the Entra app (ZDNA connector)', () => {
+    const catalog = {
+      claimNames: ['role', 'roles', 'group', 'groups', 'department', 'jobtitle', 'employeeType'],
+      roles: ['Zebra.Admin', 'Zebra.Viewer'],
+      groups: [{ id: '11111111-1111-1111-1111-111111111111', name: 'ZDNA Admins' }],
+    };
+    const oidcBase = {
+      protocol: 'oidc',
+      domains: 'example.com',
+      tenant_id: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+      client_id: '22222222-2222-2222-2222-222222222222',
+      jit_enabled: true,
+    };
+
+    test('skips the Entra lookup when the connector is not configured', async () => {
+      const { saveSsoConfig, getEntraClaimsCatalog, pgSave } = loadService();
+      await saveSsoConfig({ ...oidcBase, jit_mappings: [{ mapping_source: 'role', mapping_value: 'Anything', zdna_role: 'Admin' }] });
+      expect(getEntraClaimsCatalog).not.toHaveBeenCalled();
+      expect(pgSave).toHaveBeenCalled();
+    });
+
+    test('saves when every claim name and value exists in the Entra app', async () => {
+      const { saveSsoConfig, getEntraClaimsCatalog, pgSave } = loadService({ catalog });
+      await saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [
+          { mapping_source: 'Role', mapping_value: 'zebra.admin', zdna_role: 'Admin' },
+          { mapping_source: 'groups', mapping_value: '11111111-1111-1111-1111-111111111111', zdna_role: 'Viewer' },
+          { mapping_source: 'department', mapping_value: 'IT', zdna_role: 'Viewer' },
+          { mapping_source: 'default', zdna_role: 'Viewer' },
+        ],
+      });
+      expect(getEntraClaimsCatalog).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 'oidc', tenant_id: oidcBase.tenant_id, client_id: oidcBase.client_id,
+      }));
+      expect(pgSave).toHaveBeenCalled();
+    });
+
+    test('rejects a claim name the Entra app does not send', async () => {
+      const { saveSsoConfig, pgSave } = loadService({ catalog });
+      await expect(saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [{ mapping_source: 'costCenter', mapping_value: '42', zdna_role: 'Admin' }],
+      })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CLAIM_NAME' });
+      expect(pgSave).not.toHaveBeenCalled();
+    });
+
+    test('rejects a role value that is not an app role of the Entra app', async () => {
+      const { saveSsoConfig } = loadService({ catalog });
+      await expect(saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [{ mapping_source: 'role', mapping_value: 'Zebra.Owner', zdna_role: 'Admin' }],
+      })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CLAIM_VALUE' });
+    });
+
+    test('rejects a group that is not assigned to the Entra app', async () => {
+      const { saveSsoConfig } = loadService({ catalog });
+      await expect(saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [{ mapping_source: 'group', mapping_value: 'Other Group', zdna_role: 'Admin' }],
+      })).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CLAIM_VALUE' });
+    });
+
+    test('does not call Entra when only the default mapping is set', async () => {
+      const { saveSsoConfig, getEntraClaimsCatalog } = loadService({ catalog });
+      await saveSsoConfig({ ...oidcBase, jit_mappings: [{ mapping_source: 'default', zdna_role: 'Viewer' }] });
+      expect(getEntraClaimsCatalog).not.toHaveBeenCalled();
+    });
+
+    test('stores the claim name as typed (lowercased) and trims the value', async () => {
+      const { saveSsoConfig, pgSave } = loadService({ catalog });
+      await saveSsoConfig({
+        ...oidcBase,
+        jit_mappings: [
+          { mapping_source: 'Groups', mapping_value: ' 11111111-1111-1111-1111-111111111111 ', zdna_role: 'Viewer' },
+          { mapping_source: 'roles', mapping_value: 'Zebra.Admin', zdna_role: 'Admin' },
+        ],
+      });
+      expect(savedRow(pgSave).jit_mappings).toEqual([
+        expect.objectContaining({ mapping_source: 'groups', mapping_value: '11111111-1111-1111-1111-111111111111' }),
+        expect.objectContaining({ mapping_source: 'roles', mapping_value: 'Zebra.Admin' }),
+      ]);
+    });
   });
 });

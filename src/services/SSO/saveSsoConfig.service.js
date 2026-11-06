@@ -102,6 +102,27 @@ const validateJitMappings = (jit_enabled, jit_mappings) => {
   }
 };
 
+// Every mapping must name a claim, and for role/group a value, that the
+// customer's Entra app actually has — read from Graph via the ZDNA connector
+// (entraClaimsCatalog.service). The console runs the same check live; this
+// keeps direct API calls to the same rule. A server without the connector
+// configured skips the check rather than blocking every save.
+const validateJitClaimsInEntra = async (payload) => {
+  const { jit_enabled, jit_mappings, protocol, tenant_id, client_id, sso_url, entity_id } = payload;
+  if (!jit_enabled || !Array.isArray(jit_mappings)) return;
+  const rows = jit_mappings.filter(m => m.zdna_role && m.mapping_source);
+  if (rows.every(m => String(m.mapping_source).trim().toLowerCase() === 'default')) return;
+
+  // Lazy require — keeps module load free of the outbound HTTPS client.
+  const catalogService = require('./entraClaimsCatalog.service');
+  if (!catalogService.isConnectorConfigured()) {
+    logger.warn('[SAVE-SSO] ZDNA connector not configured — Entra claim check skipped', { action: 'jit_claims_unchecked' });
+    return;
+  }
+  const catalog = await catalogService.getEntraClaimsCatalog({ protocol, tenant_id, client_id, sso_url, entity_id });
+  catalogService.validateMappingsAgainstCatalog(rows, catalog);
+};
+
 // Normalises validated mappings once for BOTH stores: lowercases the source
 // and resolves priority — the frontend's explicit `order` wins when every row
 // has a unique finite order; otherwise array position decides (as before).
@@ -113,6 +134,7 @@ const normalizeJitMappings = (jit_mappings) => {
   return rows.map((m, i) => ({
     ...m,
     mapping_source: String(m.mapping_source).trim().toLowerCase(),
+    mapping_value: typeof m.mapping_value === 'string' ? m.mapping_value.trim() : m.mapping_value,
     priority: useOrder ? Number(m.order) : i + 1,
   }));
 };
@@ -220,7 +242,10 @@ const saveToPostgres = async (company_id, fields) => {
  * @returns {Promise<{ success: boolean, company_id: string, message: string }>}
  * @throws {Error} statusCode:400 — MISSING_PROTOCOL | MISSING_DOMAINS | INVALID_PROTOCOL |
  *                 INVALID_DOMAINS | MISSING_TENANT_ID | INVALID_TENANT_ID | MISSING_SSO_URL |
- *                 INVALID_SSO_URL | INVALID_PKCS12 | NO_PRIVATE_KEY
+ *                 INVALID_SSO_URL | INVALID_PKCS12 | NO_PRIVATE_KEY |
+ *                 INVALID_CLAIM_NAME | INVALID_CLAIM_VALUE
+ * @throws {Error} statusCode:403/404/502 — ENTRA_CONNECTOR_NOT_CONSENTED | ENTRA_APP_NOT_FOUND |
+ *                 ENTRA_LOOKUP_FAILED (JIT mappings could not be checked against Entra)
  */
 const saveSsoConfig = async (payload) => {
   const {
@@ -233,6 +258,7 @@ const saveSsoConfig = async (payload) => {
   logger.debug('saveconfig service file[payload]');
   validateRequiredFields(payload);
   validateJitMappings(jit_enabled, jit_mappings);
+  await validateJitClaimsInEntra(payload);
   const normalizedJitMappings = normalizeJitMappings(jit_mappings);
 
   const entraTenantId = deriveEntraTenantId(tenant_id, sso_url);
