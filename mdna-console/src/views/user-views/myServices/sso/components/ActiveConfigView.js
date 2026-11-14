@@ -21,8 +21,8 @@ const metaValue = {
   fontSize: 13,
   fontWeight: 500,
   color: '#1a1a2e',
-  wordBreak:'break-word',
-  overflowWrap:'break-word'
+  wordBreak: 'break-word',
+  overflowWrap: 'break-word'
 };
 
 const StatusBadge = ({ status }) => (
@@ -116,17 +116,30 @@ const ActiveConfigView = ({
   );
 
   const handleRemoveClick = () => {
-    Modal.confirm({
-      title: 'Remove SSO Configuration?',
-      content:
-        'This will permanently delete all SSO and JIT configuration. This action is irreversible.',
-      okText: 'Remove',
-      okButtonProps: { danger: true },
-      onOk: onRemove
-    });
-  };
+  Modal.confirm({
+    title: 'Remove SSO Configuration?',
+    content: 'This will permanently delete all SSO and JIT configuration.',
+    okText: 'Remove',
+    cancelText: 'Cancel',
+    okType: 'danger',
+    okButtonProps: {
+      className: 'sso-remove-ok-btn',
+    },
+    cancelButtonProps: {
+      style: {
+        borderColor: '#d9d9d9',
+        color: 'rgba(0, 0, 0, 0.85)',
+        fontWeight: 600,
+        borderRadius: '6px',
+      },
+    },
+    onOk: onRemove
+  });
+};
+
 
   return (
+    <>
     <Card
       style={{ borderRadius: 10, marginTop: 16 }}
       bodyStyle={{ padding: '24px' }}
@@ -170,7 +183,7 @@ const ActiveConfigView = ({
             justifyContent: 'space-between',
             alignItems: 'flex-start',
             marginBottom: 16,
-            flexWrap:'wrap'
+            flexWrap: 'wrap'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -180,9 +193,6 @@ const ActiveConfigView = ({
             >
               SSO Configuration
             </span>
-            <Tooltip title="Read-only view of your active SSO configuration">
-              <InfoCircleOutlined style={{ color: '#0073E6', fontSize: 14 }} />
-            </Tooltip>
           </div>
           <StatusBadge status={savedConfig.sso_status} />
         </div>
@@ -230,11 +240,27 @@ const ActiveConfigView = ({
           <Col span={12}>
             <div style={metaLabel}>Last Validated</div>
             <div style={metaValue}>
-              Today,{' '}
-              {savedConfig.savedAt.toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
+              {savedConfig.savedAt
+                ? (() => {
+                  const d = new Date(savedConfig.savedAt);
+
+                  const month = d.toLocaleString('en-US', {
+                    month: 'short',
+                    timeZone: 'UTC',
+                  });
+                  const day = String(d.getUTCDate()).padStart(2, '0');
+                  const year = d.getUTCFullYear();
+                  const time = d.toLocaleTimeString('en-US', {
+                    timeZone: 'UTC',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true,
+                  });
+
+                  return `${month}-${day}-${year} ${time} UTC`;
+                })()
+                : '—'}
             </div>
           </Col>
         </Row>
@@ -248,7 +274,7 @@ const ActiveConfigView = ({
           alignItems: 'center',
           gap: 12,
           marginBottom: 20,
-          flexWrap:'wrap'
+          flexWrap: 'wrap'
         }}
       >
         {canManageSSO ? (
@@ -300,7 +326,7 @@ const ActiveConfigView = ({
       </div>
 
       {/* ROLE MAPPINGS */}
-      {savedConfig.jitEnabled && savedConfig.jitMappings?.length > 0 && (
+      {savedConfig.jitEnabled && (
         <div
           style={{
             border: '1px solid #f0f0f0',
@@ -314,7 +340,7 @@ const ActiveConfigView = ({
               display: 'flex',
               justifyContent: 'space-between',
               marginBottom: 16,
-              flexWrap:'wrap'
+              flexWrap: 'wrap'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -324,7 +350,7 @@ const ActiveConfigView = ({
               >
                 SSO Role Mappings
               </span>
-              <Tooltip title="SSO role mapping rules">
+              <Tooltip title="Ensure Claim Name and Claim Value are entered correctly against user roles">
                 <InfoCircleOutlined style={{ color: '#0073E6', fontSize: 14 }} />
               </Tooltip>
             </div>
@@ -357,7 +383,7 @@ const ActiveConfigView = ({
             )}
           </div>
 
-          <Row style={{ marginBottom: 0,padding: '10px 12px',borderBottom:'1px solid #e8e8e8'}}>
+          <Row style={{ marginBottom: 0, padding: '10px 12px', borderBottom: '1px solid #e8e8e8' }}>
             {['Role', 'Claim Name', 'Claim Value'].map((h, i) => (
               <Col key={h} span={8}>
                 <span style={{ fontSize: 15, fontWeight: 500, color: '#8c8c8c' }}>
@@ -367,36 +393,47 @@ const ActiveConfigView = ({
             ))}
           </Row>
 
+          {!editingJit && !savedConfig.jitMappings?.length && (
+            <div id="role-mappings-empty" style={{ padding: '12px', fontSize: 13, color: '#8c8c8c' }}>
+              No role mappings configured. Click Manage roles to add one.
+            </div>
+          )}
+
           {(editingJit ? jitMappings : savedConfig.jitMappings).map((m, i) => (
             <Row
               key={m.id}
               style={{
                 padding: '12px',
-                backgroundColor:i%2 === 0 ? '#f5f5f5' : '#ffffff',
+                backgroundColor: i % 2 === 0 ? '#f5f5f5' : '#ffffff',
                 borderBottom: '1px solid #e8e8e8',
-                alignItems: 'center'
+                alignItems: 'flex-start'
               }}
             >
-              <Col span={editingJit?6:8}>
+              <Col span={editingJit ? 6 : 8}>
                 {editingJit ? (
                   <div>
                     <Select
                       id={`role-select-${i + 1}`}
                       value={m.zdna_role}
                       onChange={(v) => updateMapping(i, 'zdna_role', v)}
-                      style={{ width: '100%' ,position:'relative'}}
+                      style={{ width: '100%' }}
                       status={mappingErrors[i] ? 'error' : ''}
                     >
                       {roleData.map((r) => (
                         <Option key={r.value} value={r.value}>{r.label}</Option>
                       ))}
                     </Select>
+                    {mappingErrors[i] && (
+                      <div style={{ color: '#ff4d4f', fontSize: 11, marginTop: 2 }}>
+                        {mappingErrors[i]}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <span id={`role-value-${i + 1}`}>{m.zdna_role || '—'}</span>
                 )}
               </Col>
-              <Col span={editingJit?7:8}>
+              <Col span={editingJit ? 7 : 8}>
                 {editingJit ? (
                   <Input
                     id={`claim-name-input-${i + 1}`}
@@ -408,7 +445,7 @@ const ActiveConfigView = ({
                   <span id={`claim-name-value-${i + 1}`}>{m.mapping_source || '—'}</span>
                 )}
               </Col>
-              <Col span={editingJit?7:8}>
+              <Col span={editingJit ? 7 : 8}>
                 {editingJit ? (
                   <Input
                     id={`claim-value-input-${i + 1}`}
@@ -432,14 +469,6 @@ const ActiveConfigView = ({
                   </Button>
                 )}
               </Col>
-              {/* Full row width, on its own line, so a long message never runs under the buttons below */}
-              {editingJit && mappingErrors[i] && (
-                <Col span={24}>
-                  <div id={`role-error-${i + 1}`} style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>
-                    {mappingErrors[i]}
-                  </div>
-                </Col>
-              )}
             </Row>
           ))}
 
@@ -490,9 +519,6 @@ const ActiveConfigView = ({
                   loading={saving || entraStatus === 'loading'}
                   disabled={!isJitValid(true) || saving || entraStatus !== 'ready'}
                   onClick={async () => {
-                    // Await the parent update so the button keeps its spinner
-                    // until the save resolves — closing the editor first left
-                    // the slowest path in the page with no feedback at all.
                     await onSaveJitMappings(
                       jitMappings.map((row, index) => ({
                         ...row,
@@ -501,15 +527,39 @@ const ActiveConfigView = ({
                     );
                     setEditingJit(false);
                   }}
+                  style={{
+                    borderRadius: 6,
+                    fontWeight: 800,
+                    opacity: 1,
+                    backgroundColor: isJitValid(true) ? '#1677ff' : '#a0c4ff',
+                    borderColor: isJitValid(true) ? '#1677ff' : '#a0c4ff',
+                    color: '#fff',
+                    cursor: isJitValid(true) ? 'pointer' : 'not-allowed',
+                  }}
                 >
                   Save
                 </Button>
+
               </div>
             </div>
           )}
         </div>
       )}
     </Card>
+    <style>{`
+  .sso-remove-ok-btn {
+    background-color: #d70015 !important;
+    border-color: #d70015 !important;
+    color: #fff !important;
+    font-weight: 600;
+    border-radius: 6px;
+  }
+  .sso-remove-ok-btn:hover {
+    background-color: #b0001a !important;
+    border-color: #b0001a !important;
+  }
+`}</style>
+ </>
   );
 };
 
