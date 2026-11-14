@@ -56,6 +56,7 @@ const mapApiToSavedConfig = (d) => ({
   tenant_id: d.integration.entra_tenant_id,
   client_id: d.oidc_config?.client_id,
   auth_method: d.oidc_config?.client_auth_method,
+  app_id: d.saml_config?.app_id,
   idp: d.integration.idp,
   sso_url: d.saml_config?.sso_url,
   sso_status: d.integration.sso_status,
@@ -71,7 +72,7 @@ const mapApiToSavedConfig = (d) => ({
       : !!d.oidc_config?.client_cert_thumbprint,
   hasSigningCert: !!d.saml_config?.has_signing_certificate,
   certNames: {},
-  client_secret: d.integration.protocol === 'oidc' ? d.oidc_config?.client_secret : undefined,
+  client_secret: d.integration.protocol === 'saml' ? d.saml_config?.client_secret : d.oidc_config?.client_secret,
 });
 
 const parseDomains = (entra_domain) => {
@@ -107,6 +108,7 @@ const buildSavePayload = ({
   sign_auth: values.sign_auth,
   signing_certificate: samlSigningCertB64,
   signing_certificate_password: values.saml_signing_cert_password,
+  app_id: values.app_id,
   certificate: protocol === 'saml' ? samlCertB64 : oidcCertB64,
   certificate_password: values.certificate_password || undefined,
   redirect_uri: values.redirect_uri,
@@ -274,6 +276,7 @@ const SsoIntegrationPage = () => {
           const config = mapApiToSavedConfig(cfg);
           if (cfg?.saml_config) {
             config.sso_url = cfg.saml_config.sso_url;
+            config.app_id = cfg.saml_config.app_id;
           }
           setSavedConfig(config);
           setOriginalConfig(config);
@@ -360,6 +363,7 @@ const SsoIntegrationPage = () => {
       entra_domain: cfg.entra_domain,
       auth_method: formAuthMethod,
       tenant_id: cfg.tenant_id || undefined,
+      app_id: cfg.app_id || undefined,
       client_id: cfg.client_id || undefined,
       sso_url: cfg.sso_url || undefined,
       sign_auth: formSignAuth,
@@ -475,7 +479,7 @@ const SsoIntegrationPage = () => {
   };
 
   if (initialLoading) {
-    return <LoadingCard text="Loading SSO configuration…" />;
+    return <LoadingCard />;
   }
 
   if (savedConfig) {
@@ -494,6 +498,7 @@ const SsoIntegrationPage = () => {
             idp: savedConfig.idp,
             domains: savedDomains,
             tenant_id: savedConfig.tenant_id,
+            app_id: savedConfig.app_id,
             client_secret: savedConfig.client_secret,
             sso_url: savedConfig.sso_url,
             use_existing_cert: savedConfig.hasCert,
@@ -617,3 +622,4 @@ const SsoIntegrationPage = () => {
 };
 
 export default SsoIntegrationPage;
+
