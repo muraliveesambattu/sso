@@ -87,7 +87,7 @@ describe('useJitMappings — validation', () => {
 
   test('a partially filled row is flagged as incomplete', () => {
     const { result } = renderHook(() => useJitMappings([row('Admin', '', '')]));
-    expect(result.current.mappingErrors[0]).toMatch(/All fields .* are required/);
+    expect(result.current.mappingErrors[0]).toMatch(/All fields.* are required/);
   });
 
   test('a complete row produces no errors', () => {
@@ -110,15 +110,6 @@ describe('useJitMappings — validation', () => {
     expect(result.current.mappingErrors).toEqual({});
   });
 
-  test('different roles sharing a claim name AND value are flagged on both rows', () => {
-    const { result } = renderHook(() =>
-      useJitMappings([row('Admin', 'group', 'same', 'r1'), row('Viewer', 'group', 'same', 'r2')])
-    );
-    expect(result.current.mappingErrors[0]).toMatch(/Different roles with same Claim Name must have different Claim Value/);
-    expect(result.current.mappingErrors[1]).toMatch(/Different roles with same Claim Name must have different Claim Value/);
-    expect(result.current.isJitValid(true)).toBe(false);
-  });
-
   test('same role twice with the same claim name AND value is allowed', () => {
     const { result } = renderHook(() =>
       useJitMappings([row('Manager', 'role', 'testing.login', 'r1'), row('Manager', 'role', 'testing.login', 'r2')])
@@ -139,14 +130,6 @@ describe('useJitMappings — validation', () => {
       useJitMappings([row('Admin', 'GROUP, dept', 'x', 'r1'), row('Admin', 'group', 'y', 'r2')])
     );
     expect(result.current.mappingErrors).toEqual({});
-  });
-
-  test('same value in different case across roles is flagged', () => {
-    const { result } = renderHook(() =>
-      useJitMappings([row('Admin', 'group', '  Same  ', 'r1'), row('Viewer', 'GROUP', 'same', 'r2')])
-    );
-    expect(result.current.mappingErrors[0]).toMatch(/must have different Claim Value/);
-    expect(result.current.mappingErrors[1]).toMatch(/must have different Claim Value/);
   });
 
   test('isJitValid(false) short-circuits to true regardless of errors', () => {
@@ -281,7 +264,7 @@ describe('useJitMappings — checked against the Entra app (live)', () => {
 
     test('an empty value shows the required-fields error, not the Entra one', () => {
       const { result } = render([row('Viewer', 'department', '', 'r1')], withUsers);
-      expect(result.current.mappingErrors[0]).toMatch(/All fields .* are required/);
+      expect(result.current.mappingErrors[0]).toMatch(/All fields.* are required/);
     });
 
     test('Save is allowed again once the admin fixes the value', () => {

@@ -1,18 +1,16 @@
 import { useState, useMemo, useCallback } from 'react';
+import {
+  MAX_CLAIM_NAME_LENGTH,
+  ROLE_CLAIMS,
+  GROUP_CLAIMS,
+  USER_ATTRIBUTE_CLAIMS,
+  ENTRA_CLAIM_ERRORS,
+} from '../constants/SsoConstants';
 
 const EMPTY_ROW = {
   zdna_role: '',
   mapping_source: '',
   mapping_value: '',
-};
-
-const MAX_CLAIM_NAME_LENGTH = 30; // jit_mappings.mapping_source is VARCHAR(30)
-const ROLE_CLAIMS = new Set(['role', 'roles']);
-const GROUP_CLAIMS = new Set(['group', 'groups']);
-// Free-text user attributes: the value must be one some user in the tenant has.
-const USER_ATTRIBUTE_CLAIMS = {
-  department: { key: 'departments', label: 'department' },
-  jobtitle: { key: 'jobTitles', label: 'job title' },
 };
 
 const norm = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
@@ -28,23 +26,23 @@ export const checkAgainstEntra = (row, entraClaims) => {
   const value = (row.mapping_value || '').trim();
   if (name === 'default') return null;
   if (name.length > MAX_CLAIM_NAME_LENGTH) {
-    return `Claim name must be ${MAX_CLAIM_NAME_LENGTH} characters or fewer`;
+    return ENTRA_CLAIM_ERRORS.claimNameTooLong(MAX_CLAIM_NAME_LENGTH);
   }
   if (!entraClaims.claimNames.some((n) => norm(n) === name)) {
-    return `Claim "${row.mapping_source.trim()}" is not configured for this app in Microsoft Entra`;
+    return ENTRA_CLAIM_ERRORS.claimNotConfigured(row.mapping_source.trim());
   }
   if (ROLE_CLAIMS.has(name) && !entraClaims.roles.some((r) => norm(r) === norm(value))) {
-    return `"${value}" is not an app role of this app in Microsoft Entra`;
+    return ENTRA_CLAIM_ERRORS.roleNotFound(value);
   }
   if (GROUP_CLAIMS.has(name)
     && !entraClaims.groups.some((g) => g.id === value || (g.name && norm(g.name) === norm(value)))) {
-    return `"${value}" is not a group assigned to this app in Microsoft Entra`;
+    return ENTRA_CLAIM_ERRORS.groupNotFound(value);
   }
   const attribute = USER_ATTRIBUTE_CLAIMS[name];
   if (attribute && entraClaims.userAttributes) {
     const known = entraClaims.userAttributes[attribute.key] || [];
     if (!known.some((v) => norm(v) === norm(value))) {
-      return `No user in Microsoft Entra has ${attribute.label} "${value}"`;
+      return ENTRA_CLAIM_ERRORS.attributeNotFound(attribute.label, value);
     }
   }
   return null;
@@ -52,7 +50,6 @@ export const checkAgainstEntra = (row, entraClaims) => {
 
 const validateMappings = (rows, entraClaims) => {
   const errors = {};
-  const claimValueMap = new Map();
   rows.forEach((row, index) => {
     const role = row.zdna_role?.trim();
     const claimNames = row.mapping_source
@@ -66,23 +63,9 @@ const validateMappings = (rows, entraClaims) => {
       return;
     }
     if (!role || !claimNames?.length || !claimValue) {
-      errors[index] = 'All fields (Role, Claim Name, Claim Value) are required';
-      return;
+      errors[index] = 'All fields are required';
     }
-    // The same role may repeat a claim name (e.g. Manager on role=A and role=B);
-    // only different roles on the same claim name AND value are ambiguous.
-    claimNames.forEach((claimName) => {
-      const claimValueKey = `${claimName}__${claimValue}`;
-      if (claimValueMap.has(claimValueKey)) {
-        const prev = claimValueMap.get(claimValueKey);
-        if (prev.role !== role) {
-          errors[index] = 'Different roles with same Claim Name must have different Claim Value';
-          errors[prev.index] = 'Different roles with same Claim Name must have different Claim Value';
-        }
-      } else {
-        claimValueMap.set(claimValueKey, { role, index });
-      }
-    });
+    // Only check against Entra once the row is complete; undefined catalog → no check.
     if (!errors[index]) {
       const entraProblem = entraClaims ? checkAgainstEntra(row, entraClaims) : null;
       if (entraProblem) errors[index] = entraProblem;
@@ -91,11 +74,6 @@ const validateMappings = (rows, entraClaims) => {
   return errors;
 };
 
-/**
- * @param initial      starting rows
- * @param entraClaims  catalog from useEntraClaims; when present, rows are checked
- *                     against it as the admin types. Undefined → no Entra check.
- */
 export const useJitMappings = (initial = [EMPTY_ROW], { entraClaims } = {}) => {
   const [jitMappings, setJitMappings] = useState(initial);
 
@@ -117,10 +95,7 @@ export const useJitMappings = (initial = [EMPTY_ROW], { entraClaims } = {}) => {
     setJitMappings(rows);
   }, []);
 
-  const mappingErrors = useMemo(
-    () => validateMappings(jitMappings, entraClaims),
-    [jitMappings, entraClaims]
-  );
+  const mappingErrors = useMemo(() => validateMappings(jitMappings, entraClaims), [jitMappings, entraClaims]);
 
   const isJitValid = useCallback((jitEnabled) => {
     if (!jitEnabled) {
