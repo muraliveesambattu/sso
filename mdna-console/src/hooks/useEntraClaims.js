@@ -1,19 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getEntraClaimsApi } from '../services/ssoApi';
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const LOAD_DELAY_MS = 400;
-
-const FAILED_MESSAGE = 'Could not load claims from Microsoft Entra. Please try again.';
-const INCOMPLETE_MESSAGE = 'Microsoft Entra claims cannot be checked: the SSO configuration has no valid tenant or app ID.';
+import {
+  ENTRA_GUID_RE,
+  ENTRA_SAML_TENANT_RE,
+  ENTRA_CLAIMS_LOAD_DELAY_MS,
+  ENTRA_CLAIMS_FAILED_MESSAGE,
+  ENTRA_CLAIMS_INCOMPLETE_MESSAGE,
+} from '../constants/SsoConstants';
 
 const IDLE = { catalog: undefined, status: 'idle', error: null };
 
 // The SSO app must be identifiable before Entra can be asked about it:
 // OIDC by tenant + client id, SAML by the tenant inside its SSO URL.
 const isComplete = ({ protocol, tenantId, clientId, ssoUrl }) => {
-  if (protocol === 'oidc') return GUID_RE.test(tenantId || '') && GUID_RE.test(clientId || '');
-  if (protocol === 'saml') return /login\.microsoftonline\.com\/[0-9a-f-]{36}\//i.test(ssoUrl || '');
+  if (protocol === 'oidc') return ENTRA_GUID_RE.test(tenantId || '') && ENTRA_GUID_RE.test(clientId || '');
+  if (protocol === 'saml') return ENTRA_SAML_TENANT_RE.test(ssoUrl || '');
   return false;
 };
 
@@ -39,7 +40,7 @@ export const useEntraClaims = ({ enabled, companyId, protocol, tenantId, clientI
       return undefined;
     }
     if (!complete) {
-      setState({ catalog: undefined, status: 'error', error: INCOMPLETE_MESSAGE });
+      setState({ catalog: undefined, status: 'error', error: ENTRA_CLAIMS_INCOMPLETE_MESSAGE });
       return undefined;
     }
     setState({ catalog: undefined, status: 'loading', error: null });
@@ -58,14 +59,14 @@ export const useEntraClaims = ({ enabled, companyId, protocol, tenantId, clientI
         if (ok && data?.success) {
           setState({ catalog: data.data, status: 'ready', error: null });
         } else {
-          setState({ catalog: undefined, status: 'error', error: data?.error?.message || data?.message || FAILED_MESSAGE });
+          setState({ catalog: undefined, status: 'error', error: data?.error?.message || data?.message || ENTRA_CLAIMS_FAILED_MESSAGE });
         }
       } catch (err) {
         if (cancelled) return;
         console.warn('[SSO] Entra claims not loaded:', err.message);
-        setState({ catalog: undefined, status: 'error', error: FAILED_MESSAGE });
+        setState({ catalog: undefined, status: 'error', error: ENTRA_CLAIMS_FAILED_MESSAGE });
       }
-    }, LOAD_DELAY_MS);
+    }, ENTRA_CLAIMS_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
       clearTimeout(timer);
