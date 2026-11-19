@@ -24,7 +24,11 @@ jest.mock('auth/AuthProvider', () => ({ AuthContext: require('react').createCont
 
 const SESSION_REF = 'session-ref-1';
 const REDIRECT_URL = 'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/saml2?SAMLRequest=abc';
-const POLL_MS = 2000; // SAML_POLL_INTERVAL_MS in useTestConnection
+// One test tick: longer than SAML_SIGNAL_CHECK_MS and SAML_RESULT_RETRY_MS.
+const POLL_MS = 2000;
+
+// What the callback page does after a finished SAML sign-in.
+const signalDone = () => localStorage.setItem(`tc_saml_done:${SESSION_REF}`, '1');
 
 const form = { getFieldsValue: () => ({}) };
 let popup;
@@ -84,23 +88,25 @@ describe('Activate SAML — popup first, then activate', () => {
     const { result } = renderActivate();
 
     const { pending } = await startActivate(result);
+    signalDone();
     await pollOnce();
     await act(async () => { await pending; });
 
     expect(testConnectionApi).toHaveBeenCalledWith({ company_id: 'company-1', protocol: 'saml', is_existing_test: true });
   });
 
-  test('opens the Entra popup and waits; nothing is ready before the sign-in finishes', async () => {
+  test('opens the Entra popup and waits without asking the backend before the sign-in finishes', async () => {
     testConnectionApi.mockResolvedValue(samlSession());
     testSamlResultApi.mockResolvedValue({ ok: false, status: 202, data: { pending: true } });
     const { result } = renderActivate();
 
     await startActivate(result);
     await pollOnce();
+    await pollOnce();
 
     expect(window.open).toHaveBeenCalledWith(REDIRECT_URL, 'ssoOidcValidation', expect.any(String));
     expect(localStorage.getItem('tc_session_ref')).toBe(SESSION_REF);
-    expect(testSamlResultApi).toHaveBeenCalledWith({ sessionRef: SESSION_REF });
+    expect(testSamlResultApi).not.toHaveBeenCalled();
     expect(result.current.testLoading).toBe(true);
     expect(result.current.testPassed).toBe(false);
     expect(setIsTestReady).not.toHaveBeenCalled();
@@ -114,15 +120,18 @@ describe('Activate SAML — popup first, then activate', () => {
     const { result } = renderActivate();
 
     const { pending } = await startActivate(result);
+    signalDone();
     await pollOnce();
     expect(setIsTestReady).not.toHaveBeenCalled();
     await pollOnce();
     let outcome;
     await act(async () => { outcome = await pending; });
 
+    expect(testSamlResultApi).toHaveBeenCalledTimes(2);
     expect(outcome).toEqual({ success: true, message: 'Test Connection successful.' });
     expect(result.current.testPassed).toBe(true);
-    expect(result.current.testResult).toMatchObject({ status: 'passed', claims: { roles: ['Zebra.Admin'] } });
+    expect(result.current.testResult).toMatchObject({ status: 'passed' });
+    expect(localStorage.getItem(`tc_saml_done:${SESSION_REF}`)).toBeNull();
     expect(result.current.testLoading).toBe(false);
     expect(setIsTestReady).toHaveBeenCalledWith(true);
     expect(popup.close).toHaveBeenCalled();
@@ -137,6 +146,7 @@ describe('Activate SAML — popup first, then activate', () => {
     const { result } = renderActivate();
 
     const { pending } = await startActivate(result);
+    signalDone();
     await pollOnce();
     let outcome;
     await act(async () => { outcome = await pending; });
@@ -304,7 +314,7 @@ describe('Activate OIDC — popup first, then activate', () => {
       code: 'code-1', state: 'state-1', company_id: 'company-1', sessionRef: SESSION_REF, is_activation: true,
     });
     expect(outcome).toEqual({ success: true, message: 'SSO credentials verified successfully.' });
-    expect(result.current.testResult).toMatchObject({ status: 'passed', claims: { roles: ['Zebra.Admin'] } });
+    expect(result.current.testResult).toMatchObject({ status: 'passed' });
     expect(setIsTestReady).toHaveBeenCalledWith(true);
     expect(popup.close).toHaveBeenCalled();
     expect(localStorage.getItem('tc_oidc_code')).toBeNull();

@@ -165,6 +165,11 @@ export default function OIDCCallback() {
       // SAML Test Connection popup: the backend already holds the result and
       // the parent tab fetches it, so this page only closes itself.
       if (samlTest) {
+        // Tell the parent tab the sign-in finished; it then fetches the result once.
+        const testSessionRef = localStorage.getItem('tc_session_ref');
+        if (testSessionRef) {
+          localStorage.setItem(`tc_saml_done:${testSessionRef}`, '1');
+        }
         sessionStorage.removeItem(guardKey);
         globalThis.close();
         return;

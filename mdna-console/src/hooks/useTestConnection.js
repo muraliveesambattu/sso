@@ -1,9 +1,11 @@
 import { useState, useContext, useEffect, useRef } from 'react';
 import {
   AUTH_METHOD_MAP,
+  SAML_ACS_URL,
+  SAML_ENTITY_ID,
   REDIRECT_URI,
 } from '../constants/SsoConstants';
-import { testConnectionApi, testConnectionCallbackApi, testSamlResultApi } from '../services/ssoApi';
+import { testConnectionApi, testConnectionCallbackApi,testSamlResultApi } from '../services/ssoApi';
 import { getTenantId } from 'auth/FirebaseAuth';
 import { AuthContext } from 'auth/AuthProvider';
 
@@ -63,7 +65,9 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
   const OIDC_POPUP_TIMEOUT_MS = 10 * 60 * 1000;
   const OIDC_POLL_INTERVAL_MS = 500;
   const SAML_TEST_TIMEOUT_MS = 5 * 60 * 1000;
-  const SAML_POLL_INTERVAL_MS = 2000;
+  const SAML_SIGNAL_CHECK_MS = 300; // local check only, no network
+  const SAML_RESULT_RETRY_MS = 1000; // minimum gap between result calls
+  const SAML_RESULT_ATTEMPTS = 3; // 401 retries after the popup closed
 
   const TEST_CONNECTION_STORAGE_KEYS = [
     'tc_company_id',
@@ -196,10 +200,14 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         protocol: 'saml',
         company_id: companyId,
         domains: parseDomains(values.entra_domain),
+        entity_id: SAML_ENTITY_ID,
+        acs_url: SAML_ACS_URL,
         sso_url: values.sso_url?.trim(),
         certificate: samlCertificate,
         use_existing_cert: fileValues.saml_cert === '__existing__',
         tenant_id: extractSamlTenantId(values.sso_url),
+        app_id: values.app_id?.trim(),
+        client_secret: values.client_secret?.trim(),
         sign_authn_request: !!values.sign_auth,
         signing_certificate: samlSigningCert,
         signing_certificate_password: values.saml_signing_cert_password || undefined,
@@ -352,7 +360,6 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
       const finish = ({
         success,
         message,
-        claims,
       }) => {
         if (completed) {
           return;
@@ -367,7 +374,6 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         resolve({
           success,
           message,
-          claims,
         });
       };
 
@@ -430,7 +436,6 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
               (isExistingTest
                 ? 'SSO credentials verified successfully.'
                 : 'Test Connection successful.'),
-            claims: data.data?.claims,
           });
         } catch (error) {
           console.error(
@@ -551,11 +556,11 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
     });
 
   /**
-   * Wait for the SAML test login to finish.
+   * Wait for the SAML Test Connection result.
    *
-   * The result is held by the backend, which answers 202 (pending) until the
-   * ACS callback has run. A closed popup only counts as cancelled while the
-   * backend is still pending.
+   * No backend calls while the user is signing in. The callback page sets
+   * `tc_saml_done:<sessionRef>` just before it closes the popup; only then,
+   * or when the popup was closed, is the backend asked for the result.
    */
   const waitForSamlResult = ({
     popup,
@@ -563,9 +568,13 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
   }) =>
     new Promise((resolve) => {
       const startedAt = Date.now();
+      const doneKey = `tc_saml_done:${sessionRef}`;
+      const cancelMessage = 'Test Connection was cancelled. Please try again.';
 
       let completed = false;
       let requestInProgress = false;
+      let lastRequestAt = 0;
+      let pendingAfterClose = 0;
 
       const finish = ({
         success,
@@ -580,12 +589,69 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
 
         clearPopupPolling();
         closePopupSafely(popup);
+        localStorage.removeItem(doneKey);
         clearTestConnectionStorage();
 
         resolve({
           success,
           message,
           claims,
+        });
+      };
+
+      /*
+       * The callback page reported an error (e.g. MISSING_SAML_RESPONSE).
+       */
+      const readCallbackError = () => {
+        const storedResult = localStorage.getItem('tc_result');
+
+        if (!storedResult) {
+          return null;
+        }
+
+        try {
+          return JSON.parse(storedResult)?.message
+            || 'Microsoft Entra authentication failed.';
+        } catch {
+          return storedResult;
+        }
+      };
+
+      const checkSamlResult = async ({ popupWasClosed, signalled }) => {
+        const {
+          ok,
+          status,
+          data,
+        } = await testSamlResultApi({ sessionRef });
+
+        // 202: not ready yet. 401: this instance may not hold the session.
+        if (status === 202 || status === 401 || data?.pending) {
+          if (popupWasClosed && !signalled) {
+            pendingAfterClose += 1;
+
+            // Closed without the done signal means the user cancelled.
+            // On 401, retry a few times in case another instance holds the result.
+            if (status !== 401 || pendingAfterClose >= SAML_RESULT_ATTEMPTS) {
+              finish({ success: false, message: cancelMessage });
+            }
+          }
+
+          return;
+        }
+
+        if (!ok || !data?.success) {
+          finish({
+            success: false,
+            message: getApiErrorMessage(data, 'Test Connection failed.'),
+          });
+
+          return;
+        }
+
+        finish({
+          success: true,
+          message: 'Test Connection successful.',
+          claims: data.data?.claims,
         });
       };
 
@@ -597,89 +663,40 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         if (Date.now() - startedAt >= SAML_TEST_TIMEOUT_MS) {
           finish({
             success: false,
-            message:
-              'Test connection validation timed out. Please try again.',
+            message: 'Test connection validation timed out. Please try again.',
           });
 
           return;
         }
 
-        /*
-         * The callback page reported an error (e.g. MISSING_SAML_RESPONSE).
-         */
-        const storedResult =
-          localStorage.getItem('tc_result');
+        const callbackError = readCallbackError();
 
-        if (storedResult) {
-          let parsedResult;
+        if (callbackError) {
+          finish({ success: false, message: callbackError });
+          return;
+        }
 
-          try {
-            parsedResult = JSON.parse(storedResult);
-          } catch {
-            parsedResult = {
-              message: storedResult,
-            };
-          }
+        // Read "closed" before the signal: the callback page sets the signal
+        // and then closes, so this order never mistakes a finished login for a cancel.
+        const popupWasClosed = popup.closed;
+        const signalled = localStorage.getItem(doneKey) === '1';
 
-          finish({
-            success: false,
-            message:
-              parsedResult?.message ||
-              'Microsoft Entra authentication failed.',
-          });
+        // Still signing in: nothing to ask the backend yet.
+        if (!popupWasClosed && !signalled) {
+          return;
+        }
 
+        if (Date.now() - lastRequestAt < SAML_RESULT_RETRY_MS) {
           return;
         }
 
         requestInProgress = true;
-
-        // Read before asking: the backend stores the result before the
-        // popup closes itself, so closed + pending means the user closed it.
-        const popupWasClosed = popup.closed;
+        lastRequestAt = Date.now();
 
         try {
-          const {
-            ok,
-            status,
-            data,
-          } = await testSamlResultApi({ sessionRef });
-
-          // 401: this instance may not hold the session. Keep waiting.
-          if (status === 202 || status === 401 || data?.pending) {
-            if (popupWasClosed && status !== 401) {
-              finish({
-                success: false,
-                message:
-                  'Test Connection was cancelled. Please try again.',
-              });
-            }
-
-            return;
-          }
-
-          if (!ok || !data?.success) {
-            finish({
-              success: false,
-              message: getApiErrorMessage(
-                data,
-                'Test Connection failed.',
-              ),
-            });
-
-            return;
-          }
-
-          finish({
-            success: true,
-            message: 'Test Connection successful.',
-            claims: data.data?.claims,
-          });
+          await checkSamlResult({ popupWasClosed, signalled });
         } catch (error) {
-          console.error(
-            '[SSO] SAML result API failed',
-            error,
-          );
-
+          console.error('[SSO] SAML result API failed', error);
           // A failed check isn't a failed login. Try again on the next tick.
         } finally {
           requestInProgress = false;
@@ -688,7 +705,7 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
 
       popupCheckRef.current = setInterval(
         pollSamlResult,
-        SAML_POLL_INTERVAL_MS,
+        SAML_SIGNAL_CHECK_MS,
       );
     });
 
@@ -733,12 +750,10 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
     const updateResult = ({
       success,
       message,
-      claims,
     }) => {
       setTestResult({
         status: success ? 'passed' : 'failed',
         message,
-        ...(claims && { claims }),
       });
 
       setTestPassed(success);
@@ -796,11 +811,6 @@ export const useTestConnection = (form, protocol, fileValues, setIsTestReady) =>
         });
       }
 
-      /*
-       * SAML: the initial API call validates metadata, certificate and the
-       * Entra app. When the backend also returns a login session, open the
-       * Entra popup and wait for the real sign-in result.
-       */
       if (protocol === 'saml' && data?.success) {
         const samlSessionRef = data.data?.sessionRef;
         const samlRedirectUrl = data.data?.redirectUrl;
