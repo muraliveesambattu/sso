@@ -161,6 +161,87 @@ The newest revision should:
 
 ---
 
+## 8. SAML ACS URL and Entity ID
+
+Use the Firebase Hosting URL for the SAML ACS URL and Entity ID, not the Cloud Run `run.app` URL. Hosting already sends `/auth/callback` to the SSO service (`mdna-console/rewrites.sso.template`), so no code change is needed. This keeps the project number out of the ACS URL.
+
+| Setting | Value |
+|---|---|
+| ACS URL (Reply URL) | `https://<project-id>.web.app/auth/callback` |
+| Entity ID (Identifier) | `https://<project-id>.web.app/auth/metadata2` |
+
+> ⚠️ **Important:** The backend and the console must use the **same** values. Test Connection uses the backend values; Save stores the console values.
+
+### 8.1 Add the new URLs in Microsoft Entra first
+
+In the customer's Entra app (**Enterprise applications → app → Single sign-on → Basic SAML Configuration**):
+
+- Add the new **Identifier (Entity ID)**.
+- Add the new **Reply URL (ACS URL)**.
+- Keep the old `run.app` values until section 8.5 passes.
+
+### 8.2 Update the backend (Cloud Run)
+
+Run in **Google Cloud Shell using Bash**. `--update-env-vars` changes only these two variables and keeps the others:
+
+```bash
+gcloud run services update <sso-service> \
+  --region us-central1 \
+  --project <project-id> \
+  --update-env-vars "SAML_ACS_URL=https://<project-id>.web.app/auth/callback,SAML_ENTITY_ID=https://<project-id>.web.app/auth/metadata2"
+```
+
+Confirm:
+
+```bash
+gcloud run services describe <sso-service> \
+  --region us-central1 \
+  --project <project-id> \
+  --format=json | \
+  jq -r '.spec.template.spec.containers[0].env[] | select(.name=="SAML_ACS_URL" or .name=="SAML_ENTITY_ID") | "\(.name)=\(.value)"'
+```
+
+> ⚠️ After every `firebase deploy`, re-run the confirm command. If the values are missing, run the update command again (see section 6).
+
+### 8.3 Update the console
+
+In the console `.env` for the environment, set:
+
+```text
+REACT_APP_SAML_ACS_URL=https://<project-id>.web.app/auth/callback
+REACT_APP_SAML_ENTITY_ID=https://<project-id>.web.app/auth/metadata2
+```
+
+Rebuild and deploy the console with the standard console deployment command. The new values appear in **My Services → Entra SAML 2.0 → Zebra DNA Configuration Values**.
+
+### 8.4 Re-save existing SAML configurations
+
+Each saved SAML configuration keeps the ACS URL from when it was saved. Open each one in the console and click **Save** again.
+
+### 8.5 Verify
+
+Check that Hosting forwards the ACS URL to the SSO service:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -X POST https://<project-id>.web.app/auth/callback
+```
+
+Expected:
+
+```text
+302 ...?error=MISSING_SAML_RESPONSE
+```
+
+A `404` or the console's HTML means the `/auth/callback` rewrite is missing from the hosting deploy.
+
+Then run **Test Connection** and one real SSO login.
+
+### 8.6 Clean up
+
+After section 8.5 passes, remove the old `run.app` Identifier and Reply URL from the Entra app.
+
+---
+
 ## Quick Deployment Checklist
 
 - [ ] Navigate to `/MDNA-Server/zDNAMicroservice/ssoManager`
@@ -173,3 +254,6 @@ The newest revision should:
 - [ ] Restore VPC egress configuration
 - [ ] Verify `DATABASE_URL`
 - [ ] Verify the newest Cloud Run revision is active
+- [ ] Add the `web.app` Identifier and Reply URL in the Entra app
+- [ ] Set `SAML_ACS_URL` / `SAML_ENTITY_ID` on Cloud Run and `REACT_APP_SAML_*` in the console `.env` (same values)
+- [ ] Re-save SAML configs, verify `/auth/callback` returns 302, run Test Connection
