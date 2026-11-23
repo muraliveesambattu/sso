@@ -5,6 +5,12 @@ jest.mock('../src/services/db/ssoDataService', () => ({
   invalidateDomainCache: jest.fn(),
 }));
 
+// The controller imports validateSsoConfiguration; mock the service so Jest
+// does not load sequelize (and its ESM-only uuid) through the real one.
+jest.mock('../src/services/SSO/testConnection.service', () => ({
+  validateSsoConfiguration: jest.fn(),
+}));
+
 jest.mock('../src/config/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
