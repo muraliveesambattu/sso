@@ -122,6 +122,40 @@ test('callback error in tc_result -> failed, no backend call', async () => {
   expect(hook.result.current.testResult.message).toBe('SAML response missing. Please try signing in again.');
 });
 
+test('callback error that is not JSON -> shown as-is, no backend call', async () => {
+  const { hook } = await start();
+  localStorage.setItem('tc_result', 'Plain callback error');
+  await tick(300);
+  expect(testSamlResultApi).not.toHaveBeenCalled();
+  expect(hook.result.current.testResult).toEqual({ status: 'failed', message: 'Plain callback error' });
+});
+
+test('callback error without a message -> default Entra message', async () => {
+  const { hook } = await start();
+  localStorage.setItem('tc_result', JSON.stringify({}));
+  await tick(300);
+  expect(testSamlResultApi).not.toHaveBeenCalled();
+  expect(hook.result.current.testResult.message).toBe('Microsoft Entra authentication failed.');
+});
+
+test('result call throws -> logged, retried 1 s later, then success', async () => {
+  const { hook } = await start();
+  const networkError = new Error('Network down');
+  testSamlResultApi
+    .mockRejectedValueOnce(networkError)
+    .mockResolvedValue({ ok: true, status: 200, data: { success: true, data: {} } });
+  localStorage.setItem('tc_saml_done:s1', '1');
+
+  await tick(300);
+  expect(testSamlResultApi).toHaveBeenCalledTimes(1);
+  expect(console.error).toHaveBeenCalledWith('[SSO] SAML result API failed', networkError);
+  expect(hook.result.current.testPassed).not.toBe(true);
+
+  await tick(1200);
+  expect(testSamlResultApi).toHaveBeenCalledTimes(2);
+  expect(hook.result.current.testResult).toEqual({ status: 'passed', message: 'Test Connection successful.' });
+});
+
 test('times out after 5 minutes with no calls', async () => {
   const { hook } = await start();
   await tick(5 * 60 * 1000 + 300);
