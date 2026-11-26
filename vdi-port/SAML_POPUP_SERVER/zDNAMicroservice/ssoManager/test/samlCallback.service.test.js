@@ -237,6 +237,117 @@ describe('samlCallback.service', () => {
     }));
   });
 
+  // ==========================================
+  // NEW ADDITIONS FOR >90% CODE COVERAGE
+  // ==========================================
+
+  test('rejects when the incoming SAMLResponse has invalid base64 encoding', async () => {
+    const bufferSpy = jest.spyOn(Buffer, 'from').mockImplementationOnce(() => {
+      throw new Error('Base64 decode failure');
+    });
+
+    await expect(processSamlCallback('!!!NotBase64!!!', null, {}, '1.2.3.4')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_ENCODING',
+    });
+
+    bufferSpy.mockRestore();
+  });
+
+  test('extracts fallback emails from alternative SAML attributes and subject NameID formats', async () => {
+    samlRequestStore.get.mockReturnValue({
+      timestamp: fixedNow - 1000,
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+    });
+
+    // XML configuration with alternate email schemes (only "email" attribute name, alternative "oid")
+    const alternateXml = `<?xml version="1.0"?>
+    <Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" ID="resp-2" Version="2.0" InResponseTo="req-123">
+      <Issuer xmlns="urn:oasis:names:tc:SAML:2.0:assertion">https://sts.windows.net/tenant-123/</Issuer>
+      <Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status>
+      <Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="assert-2" Version="2.0">
+        <Issuer>https://sts.windows.net/tenant-123/</Issuer>
+        <Subject>
+          <NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">fallback-subject@example.com</NameID>
+        </Subject>
+        <Conditions NotBefore="2026-06-26T00:00:00Z" NotOnOrAfter="2026-06-26T01:00:00Z">
+          <AudienceRestriction><Audience>entity-id-1</Audience></AudienceRestriction>
+        </Conditions>
+        <AttributeStatement>
+          <Attribute Name="email"><AttributeValue>fallback-email@example.com</AttributeValue></Attribute>
+          <Attribute Name="oid"><AttributeValue>oid-456</AttributeValue></Attribute>
+          <Attribute Name="displayname"><AttributeValue>Display Fallback</AttributeValue></Attribute>
+        </AttributeStatement>
+      </Assertion>
+    </Response>`;
+
+    const result = await processSamlCallback(encodeSaml(alternateXml), null, {}, '1.2.3.4');
+    expect(result.customToken).toBe('firebase-saml-token');
+    expect(resolveUser).toHaveBeenCalledWith('company-1', expect.objectContaining({
+      email: 'fallback-email@example.com',
+      oid: 'oid-456',
+    }), 'saml');
+  });
+
+  test('extracts fallback emails from NameID when all other AttributeStatement email claims are missing', async () => {
+    samlRequestStore.get.mockReturnValue({
+      timestamp: fixedNow - 1000,
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+    });
+
+    const fallbackXml = `<?xml version="1.0"?>
+    <Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" ID="resp-3" Version="2.0" InResponseTo="req-123">
+      <Issuer xmlns="urn:oasis:names:tc:SAML:2.0:assertion">https://sts.windows.net/tenant-123/</Issuer>
+      <Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status>
+      <Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="assert-3" Version="2.0">
+        <Issuer>https://sts.windows.net/tenant-123/</Issuer>
+        <Subject>
+          <NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">nameid-email@example.com</NameID>
+        </Subject>
+        <Conditions NotBefore="2026-06-26T00:00:00Z" NotOnOrAfter="2026-06-26T01:00:00Z">
+          <AudienceRestriction><Audience>entity-id-1</Audience></AudienceRestriction>
+        </Conditions>
+        <AttributeStatement>
+          <Attribute Name="objectidentifier"><AttributeValue>oid-789</AttributeValue></Attribute>
+        </AttributeStatement>
+      </Assertion>
+    </Response>`;
+
+    const result = await processSamlCallback(encodeSaml(fallbackXml), null, {}, '1.2.3.4');
+    expect(result.customToken).toBe('firebase-saml-token');
+    expect(resolveUser).toHaveBeenCalledWith('company-1', expect.objectContaining({
+      nameId: { value: 'nameid-email@example.com', format: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress' },
+    }), 'saml');
+  });
+
+  test('handles missing Subject structure, empty Attributes, and missing Attribute values gracefully', async () => {
+    samlRequestStore.get.mockReturnValue({
+      timestamp: fixedNow - 1000,
+      ssoContext: { company_id: 'company-1', acs_url: 'https://acs.example.com', entity_id: 'entity-id-1' },
+    });
+
+    const edgeCaseXml = `<?xml version="1.0"?>
+    <Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" ID="resp-4" Version="2.0" InResponseTo="req-123">
+      <Issuer xmlns="urn:oasis:names:tc:SAML:2.0:assertion">https://sts.windows.net/tenant-123/</Issuer>
+      <Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status>
+      <Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="assert-4" Version="2.0">
+        <Issuer>https://sts.windows.net/tenant-123/</Issuer>
+        <Conditions NotBefore="2026-06-26T00:00:00Z" NotOnOrAfter="2026-06-26T01:00:00Z">
+          <AudienceRestriction><Audience>entity-id-1</Audience></AudienceRestriction>
+        </Conditions>
+        <AttributeStatement>
+          <Attribute Name="oid"><AttributeValue>oid-999</AttributeValue></Attribute>
+          <Attribute Name="emailaddress"></Attribute> <!-- Attribute with 0 AttributeValues -->
+        </AttributeStatement>
+      </Assertion>
+    </Response>`;
+
+    // Missing email triggers an error
+    await expect(processSamlCallback(encodeSaml(edgeCaseXml), null, {}, '1.2.3.4')).rejects.toThrow(
+      'Missing required claim: email'
+    );
+  });
+
   describe('Test Connection callback', () => {
     const buildTestSession = () => ({
       timestamp: fixedNow - 2000,

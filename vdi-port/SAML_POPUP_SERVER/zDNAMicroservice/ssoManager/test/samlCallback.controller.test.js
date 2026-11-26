@@ -86,4 +86,63 @@ describe('samlCallback.Controller', () => {
 
     expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?error=SAML_BAD');
   });
+
+  // ==========================================
+  // NEW ADDITIONS FOR >90% CODE COVERAGE
+  // ==========================================
+
+  test('resolves client IP when x-forwarded-for is missing but req.ip is present', async () => {
+    const req = mockReq({ SAMLResponse: 'response-4', RelayState: 'relay-4' });
+    delete req.headers['x-forwarded-for']; // Remove header
+    req.ip = '192.168.1.1';
+    
+    const res = mockRes();
+    processSamlCallback.mockResolvedValue({ customToken: 'token4', user: { user_id: 'user-4' } });
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(processSamlCallback).toHaveBeenCalledWith('response-4', 'relay-4', req.session, '192.168.1.1');
+    expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?token=token4');
+  });
+
+  test('resolves client IP when x-forwarded-for and req.ip are missing but req.connection is present', async () => {
+    const req = mockReq({ SAMLResponse: 'response-5', RelayState: 'relay-5' });
+    delete req.headers['x-forwarded-for'];
+    delete req.ip;
+    req.connection = { remoteAddress: '172.16.0.1' };
+
+    const res = mockRes();
+    processSamlCallback.mockResolvedValue({ customToken: 'token5', user: { user_id: 'user-5' } });
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(processSamlCallback).toHaveBeenCalledWith('response-5', 'relay-5', req.session, '172.16.0.1');
+  });
+
+  test('resolves client IP when all other IP properties are missing except req.socket', async () => {
+    const req = mockReq({ SAMLResponse: 'response-6', RelayState: 'relay-6' });
+    delete req.headers['x-forwarded-for'];
+    delete req.ip;
+    req.connection = {}; // Keep connection object empty to prevent crash in catch block
+    req.socket = { remoteAddress: '10.0.0.5' };
+
+    const res = mockRes();
+    processSamlCallback.mockResolvedValue({ customToken: 'token6', user: { user_id: 'user-6' } });
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(processSamlCallback).toHaveBeenCalledWith('response-6', 'relay-6', req.session, '10.0.0.5');
+  });
+
+  test('redirects with default error string when error does not have a code or custom statusCode in catch block', async () => {
+    const req = mockReq({ SAMLResponse: 'response-7', RelayState: 'relay-7' });
+    delete req.headers['x-forwarded-for'];
+    const res = mockRes();
+    const err = new Error('Generic failure'); // Error without code, statusCode
+    processSamlCallback.mockRejectedValue(err);
+
+    await samlCallbackController(req, res, jest.fn());
+
+    expect(res.redirect).toHaveBeenCalledWith('http://localhost:3000/auth/oidc/callback?error=SAML_LOGIN_FAILED');
+  });
 });

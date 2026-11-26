@@ -7,7 +7,7 @@ const FRONTEND_URL = defaults.FRONTEND_URL;
 const samlCallbackController = async (req, res, next) => {
   try {
     const { SAMLResponse, RelayState } = req.body;
-
+    logger.debug('[SAML] Callback received');
     // Input validation
     if (!SAMLResponse) {
       logger.warn('[SAML] Missing SAMLResponse in callback');
@@ -63,12 +63,12 @@ const samlCallbackController = async (req, res, next) => {
       relayState: req.body.RelayState
     }));
 
-    // Redirect to frontend with error
     return res.redirect(
       `${FRONTEND_URL}/auth/oidc/callback?error=${encodeURIComponent(err.code || 'SAML_LOGIN_FAILED')}`
     );
+
   }
 };
 
 
-module.exports = {samlCallbackController};
+module.exports = { samlCallbackController };
