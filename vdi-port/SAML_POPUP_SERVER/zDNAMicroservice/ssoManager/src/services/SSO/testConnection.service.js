@@ -1,0 +1,352 @@
+const https  = require('node:https');
+const crypto = require('node:crypto');
+const { extractFromPkcs12 } = require('../../utils/oidc/pkcs12.util');
+const { microsoft, defaults } = require('../../config/constants');
+const { isCertAuth }        = require('../../utils/shared/authMethod.util');
+const { logger } = require('../../config/logger');
+const { buildSamlRedirectUrl } = require('../Saml/samlAuthRequest.service');
+const ssoIntegration = require('../../models/ssoIntegration.model');
+const { Op } = require('sequelize');
+
+// SSRF/traversal allowlist for fetchJson. Deliberately arrays checked with
+// .includes(), NOT Sets with .has(): that is the form the security rules'
+// (S5144/S7044) compliant solutions prescribe, and each list is tiny, so the
+// O(n)-lookup rationale behind S7776 does not apply.
+const ALLOWED_SCHEMES = new Set(['https:']);;
+const ALLOWED_HOSTS   = microsoft.allowedHosts;
+
+const blockedUrlError = () => {
+  const err = new Error('Outbound request blocked — host not allowed');
+  err.statusCode = 400;
+  err.code = 'OUTBOUND_HOST_NOT_ALLOWED';
+  return err;
+};
+
+const fetchJson = (url, options) =>
+  new Promise((resolve, reject) => {
+    // SSRF/traversal guard: `url` derives from tenant-controlled config
+    // (tenant_id, sso_url) — tenant_id is format-gated in testConnection and
+    // SAML tenants come from a regex-validated GUID, so no user text can alter
+    // the path. The scheme + host allowlist is asserted here, in the same scope
+    // as the request, and the request is made ONLY inside that branch
+    // (CWE-918/CWE-22 — S5144/S7044).
+    let target;
+    try { target = new URL(url); } catch { return reject(blockedUrlError()); }
+
+    if (ALLOWED_SCHEMES.has(target.protocol) && ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
+      const body    = options.body || null;
+      const headers = { ...options.headers };
+      if (body) headers['Content-Length'] = Buffer.byteLength(body);
+
+      const reqOptions = {
+        method: options.method || 'GET',
+        headers,
+      };
+
+      const req = https.request(target, reqOptions, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+          catch { resolve({ status: res.statusCode, body: data }); }
+        });
+      });
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
+      return;
+    }
+
+    reject(blockedUrlError());
+  });
+
+const testOidcClientSecret = async ({ tenant_id, client_id, client_secret }) => {
+  const tokenUrl = microsoft.tokenUrl(tenant_id);
+  const params   = new URLSearchParams({
+    grant_type:    'client_credentials',
+    client_id,
+    client_secret,
+    scope:         microsoft.graphScope,
+  });
+
+  const res = await fetchJson(tokenUrl, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    params.toString(),
+  });
+
+  if (res.status === 200 && res.body.access_token) {
+    return { success: true, message: 'Connection successful — credentials verified with Microsoft Entra' };
+  }
+
+  const errCode = res.body.error || 'unknown_error';
+  const errDesc = res.body.error_description?.split('\r\n')[0] || 'Authentication failed';
+  return { success: false, message: `${errCode}: ${errDesc}` };
+};
+
+const testOidcDiscovery = async ({ tenant_id }) => {
+  const discoveryUrl = microsoft.discoveryUrl(tenant_id);
+  const res = await fetchJson(discoveryUrl, { method: 'GET' });
+  if (res.status === 200 && res.body.issuer) {
+    return { success: true, message: 'Tenant reachable — PKCE flow ready' };
+  }
+  return { success: false, message: 'Tenant not found or unreachable' };
+};
+
+// Extracts ALL X509Certificate values from Azure federation metadata XML.
+// Azure metadata contains multiple signing certs — must check all, not just the first.
+// Returns array of raw base64 strings (whitespace stripped).
+const extractCertsFromMetadata = (xmlString) => {
+  if (typeof xmlString !== 'string') return [];
+  const matches = [...xmlString.matchAll(/<X509Certificate[^>]*>([\s\S]+?)<\/X509Certificate>/gi)];
+  return matches.map(m => m[1].replaceAll(/\s+/g, ''));
+};
+
+// Extracts tenant ID from the metadata entityID attribute.
+// Azure sets entityID="https://sts.windows.net/{tenant-id}/"
+const extractTenantFromMetadata = (xmlString) => {
+  if (typeof xmlString !== 'string') return null;
+  const match = xmlString.match(/entityID=["']https:\/\/sts\.windows\.net\/([0-9a-f-]{36})\//i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+// Extracts tenant ID from an Azure SSO URL.
+// Handles: https://login.microsoftonline.com/{tenant-id}/saml2?appid=...
+const extractTenantFromSsoUrl = (url) => {
+  if (typeof url !== 'string') return null;
+  const match = url.match(/login\.microsoftonline\.com\/([0-9a-f-]{36})\//i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+// Extracts the per-app id from an Azure SSO URL query string.
+// Azure sets ?appid={app-id} when the application has its own signing cert —
+// that cert only appears in the appid-scoped metadata, never the tenant default.
+const extractAppIdFromSsoUrl = (url) => {
+  if (typeof url !== 'string') return null;
+  const match = url.match(/[?&]appid=([0-9a-f-]{36})\b/i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+// Builds the federation-metadata URL from validated components instead of
+// rewriting the caller's sso_url. The base is a constant and both the tenant and
+// appid are regex-validated UUIDs, so no caller-supplied text reaches the URL
+// path or query (S7044 — path must not be built from user-controlled data).
+const buildSamlMetadataUrl = (sso_url, tenant_id) => {
+  if (!sso_url) return microsoft.samlMetadataUrl(tenant_id);
+  const base  = microsoft.samlMetadataUrl(extractTenantFromSsoUrl(sso_url));
+  const appId = extractAppIdFromSsoUrl(sso_url);
+  return appId ? `${base}?appid=${appId}` : base;
+};
+
+const testSamlDiscovery = async ({ tenant_id, sso_url, certificate }) => {
+  // Validate tenant ID in SSO URL before fetching metadata
+  if (sso_url) {
+    const urlTenant = extractTenantFromSsoUrl(sso_url);
+    if (!urlTenant) {
+      return { success: false, message: 'Could not extract tenant ID from SSO URL. Ensure it matches https://login.microsoftonline.com/{tenant-id}/saml2?appid={app-id}' };
+    }
+  }
+
+  const metadataUrl = buildSamlMetadataUrl(sso_url, tenant_id);
+
+  const res = await fetchJson(metadataUrl, { method: 'GET' });
+  if (res.status !== 200) {
+    return { success: false, message: `SAML metadata unreachable (HTTP ${res.status})` };
+  }
+
+  // Verify the metadata entityID tenant matches the SSO URL tenant
+  if (sso_url) {
+    const urlTenant      = extractTenantFromSsoUrl(sso_url);
+    const metadataTenant = extractTenantFromMetadata(res.body);
+    if (metadataTenant && urlTenant && metadataTenant !== urlTenant) {
+      return { success: false, message: `SSO URL tenant does not match metadata tenant. Expected ${urlTenant}, got ${metadataTenant}` };
+    }
+  }
+
+  // Tenant metadata doesn't list an app's own signing cert, so this match needs ?appid=.
+  // Without it, the popup verifies the real response signature against this certificate.
+  if (!extractAppIdFromSsoUrl(sso_url)) {
+    return { success: true, message: 'Connection successful — SAML IdP metadata reachable' };
+  }
+
+  if (certificate) {
+    const azureCerts = extractCertsFromMetadata(res.body);
+    if (azureCerts.length === 0) {
+      return { success: false, message: 'Could not extract signing certificate from Azure metadata' };
+    }
+    // Frontend sends certificate as base64(PEM string) — decode first to get PEM, then strip headers
+    const pemString = Buffer.from(certificate, 'base64').toString('utf8');
+    const uploadedCert = pemString
+      .replaceAll('-----BEGIN CERTIFICATE-----', '')
+      .replaceAll('-----END CERTIFICATE-----', '')
+      .replaceAll(/\s+/g, '');
+    if (!azureCerts.includes(uploadedCert)) {
+      return { success: false, message: 'Certificate does not match Azure tenant signing certificate' };
+    }
+  }
+
+  return { success: true, message: 'Connection successful — SAML IdP metadata reachable and certificate verified' };
+};
+
+/**
+ * Builds the browser-test session for OIDC.
+ *
+ * @param {Object} params
+ * @param {string} params.tenant_id             - Azure AD tenant GUID
+ * @param {string} params.client_id             - Azure app client ID
+ * @param {string} [params.client_secret]       - required for client_secret_post
+ * @param {string} params.auth_method           - none | client_secret_post | private_key_jwt | certificate
+ * @param {string} [params.redirect_uri]        - OAuth2 redirect URI (falls back to OIDC_REDIRECT_URI)
+ * @param {string} [params.scope]               - defaults to 'openid profile email'
+ * @param {string} [params.certificate]         - base64 PKCS#12 (cert auth only)
+ * @param {string} [params.certificate_password]- PKCS#12 password (cert auth only)
+ * @returns {{ sessionRef: string, config: Object, _internal: Object }}
+ *          config is frontend-safe; _internal holds secrets (stored server-side in tcStore).
+ */
+const buildOidcTestSession = async ({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password }) => {
+  const sessionRef = crypto.randomUUID();
+  const state      = crypto.randomUUID();
+  const nonce      = crypto.randomUUID();
+
+  // PKCE pair — only used when auth_method is 'none'
+  const codeVerifier  = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+
+  // Client Certificate (private_key_jwt) — extract key + thumbprint from the .pfx
+  // so the callback can build the client_assertion (signed JWT) for Entra.
+  let privateKeyB64          = null;
+  let clientCertThumbprint   = null;
+  if (isCertAuth(auth_method)) {
+    const extracted        = await extractFromPkcs12(certificate, certificate_password);
+    privateKeyB64          = extracted.privateKeyB64;
+    clientCertThumbprint   = extracted.thumbprintHex;
+  }
+
+  const callbackUri = redirect_uri || process.env.OIDC_REDIRECT_URI;
+  const ssoUrl      = microsoft.authorizeUrl(tenant_id);
+
+  return {
+    sessionRef,
+    config: {
+      client_id,
+      sso_url:      ssoUrl,
+      redirect_uri: callbackUri,
+      scope:        scope || 'openid profile email',
+      state,
+      nonce,
+      ...(auth_method === 'none' && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),
+    },
+    _internal: {
+      tenant_id,
+      client_id,
+      client_auth_method: auth_method,
+      client_secret:      client_secret || null,
+      code_verifier:      auth_method === 'none' ? codeVerifier : null,
+      private_key_b64:         privateKeyB64,       // cert auth: base64(PEM) private key
+      client_cert_thumbprint:  clientCertThumbprint, // cert auth: SHA-1 hex thumbprint
+      redirect_uri:       callbackUri,
+      state,
+      nonce,
+    },
+  };
+};
+
+// Builds the browser-test session for SAML: an Entra login (ForceAuthn) whose ACS callback is
+// validated against the unsaved cert/sso_url held server-side in samlRequestStore.
+const buildSamlTestSession = async ({ sso_url, certificate }) => {
+  const sessionRef  = crypto.randomUUID();
+  const entityId    = defaults.SAML_ENTITY_ID;
+  const acsUrl      = defaults.SAML_ACS_URL;
+  const redirectUrl = await buildSamlRedirectUrl(entityId, acsUrl, sso_url, {}, sessionRef, undefined, {
+    forceAuthn:  true,
+    testContext: { sessionRef, certificate, sso_url, entity_id: entityId, acs_url: acsUrl },
+  });
+  return { protocol: 'saml', sessionRef, redirectUrl };
+};
+
+// tenant_id gets interpolated into Microsoft URL PATHS (tokenUrl/discoveryUrl/
+// authorizeUrl/samlMetadataUrl). Without a format check a value like
+// "common/../x" would steer the request path anywhere on the (allowlisted)
+// Microsoft host — S7044. Same vocabulary as saveSsoConfig's validation:
+// an Entra tenant GUID or one of the documented aliases. After this check no
+// path metacharacter can survive, so every URL built from tenant_id is inert.
+const UUID_RE        = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TENANT_SCOPES  = new Set(['common', 'consumers', 'organizations']);
+const isValidTenantScope = (tenant_id) =>
+  typeof tenant_id === 'string' && (UUID_RE.test(tenant_id) || TENANT_SCOPES.has(tenant_id));
+
+const testConnection = async (payload) => {
+  const { protocol, auth_method, tenant_id, client_id, client_secret, certificate, certificate_password, sso_url, redirect_uri, scope , company_id } = payload;
+
+  if (tenant_id) {
+    try {
+      const existingTenant = await ssoIntegration.findOne({
+        where: {
+          entra_tenant_id: tenant_id,
+        }
+      });
+      if (existingTenant && existingTenant.company_id != company_id && existingTenant.company_id != null) {
+        return {
+          success: false,
+          message: 'This Microsoft Entra tenant ID is already registered by another organization.'
+        };
+      }
+    } catch (dbError) {
+      console.error('Database verification failed:', dbError);
+      return {
+        success: false,
+        message: 'Internal server error occurred while verifying tenant configuration.'
+      };
+    }
+  }
+  // Single gate for every URL built from tenant_id below (absent is fine —
+  // SAML with an sso_url derives its tenant from the URL's validated GUID).
+  if (tenant_id && !isValidTenantScope(tenant_id)) {
+    return { success: false, message: 'tenant_id must be a valid UUID or common/consumers/organizations' };
+  }
+
+  if (protocol === 'oidc') {
+    // Phase 1 — server-side credential pre-check
+    const check = (auth_method === 'client_secret_post' && client_id && client_secret)
+      ? await testOidcClientSecret({ tenant_id, client_id, client_secret })
+      : await testOidcDiscovery({ tenant_id });
+
+    if (!check.success) return check;
+
+    // Phase 2 prep — browser popup session (sessionRef + state/nonce)
+    const session = await buildOidcTestSession({ tenant_id, client_id, client_secret, auth_method, redirect_uri, scope, certificate, certificate_password });
+
+    return {
+      success: true,
+      message: check.message,
+      data: {
+        protocol:           'oidc',
+        client_auth_method: auth_method,
+        sessionRef:         session.sessionRef,
+        config:             session.config,
+        _internal:          session._internal,
+      },
+    };
+  }
+
+  if (protocol === 'saml') {
+    const check = await testSamlDiscovery({ tenant_id, sso_url, certificate });
+
+    // No popup unless the metadata check passed AND there is a cert + sso_url to
+    // validate a real login against. The console opens the popup only when `redirectUrl`
+    // is present, so omitting `data` leaves the old behaviour.
+    if (!check.success || !sso_url || !certificate) return check;
+
+    try {
+      return { ...check, data: await buildSamlTestSession({ sso_url, certificate }) };
+    } catch (err) {
+      // Without the popup the certificate would go unchecked, so report a failure.
+      logger.warn('[SAML_TEST_SESSION_FAILED]', { error: err.message });
+      return { success: false, message: 'Could not start the SAML test sign-in. Please try again.' };
+    }
+  }
+
+  return { success: false, message: 'Unknown protocol' };
+};
+
+module.exports = { testConnection };
